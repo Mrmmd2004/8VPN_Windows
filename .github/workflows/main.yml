@@ -1,0 +1,76 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      aether_ref:
+        description: "Aether release tag"
+        default: "v2.3.0"
+      singbox_version:
+        description: "sing-box version (without v)"
+        default: "1.13.21"
+  push:
+    tags: ["v*"]
+
+env:
+  AETHER_REF: ${{ inputs.aether_ref || 'v2.3.0' }}
+  SINGBOX_VERSION: ${{ inputs.singbox_version || '1.13.21' }}
+  WINTUN_VERSION: "0.14.1"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python packages
+        run: |
+          pip install -r requirements.txt pyinstaller
+        shell: bash
+
+      - name: Download cores (Aether, sing-box, Wintun)
+        shell: bash
+        run: |
+          mkdir -p core dl
+          curl -fL "https://github.com/CluvexStudio/Aether/releases/download/${AETHER_REF}/aether-windows-x86_64.zip" -o dl/aether.zip
+          curl -fL "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-windows-amd64.zip" -o dl/singbox.zip
+          curl -fL "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip" -o dl/wintun.zip
+          7z x dl/aether.zip -odl/aether -y
+          7z x dl/singbox.zip -odl/singbox -y
+          7z x dl/wintun.zip -odl/wintun -y
+          cp "$(find dl/aether -name aether.exe | head -n1)" core/aether.exe
+          cp "$(find dl/singbox -name sing-box.exe | head -n1)" core/sing-box.exe
+          cp dl/wintun/wintun/bin/amd64/wintun.dll core/wintun.dll
+          ls -la core
+
+      - name: Build 8VPN.exe
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --windowed --name 8VPN \
+            --icon assets/icon.ico --add-data "assets;assets" \
+            --exclude-module tkinter --exclude-module PyQt6.QtNetwork \
+            --exclude-module PyQt6.QtSvg --exclude-module PyQt6.QtQml \
+            main.py
+          cp -r core dist/8VPN/core
+          cp README.md LICENSE dist/8VPN/
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/8VPN -DestinationPath 8VPN-Windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 8VPN-Windows-x64
+          path: 8VPN-Windows-x64.zip
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: 8VPN-Windows-x64.zip
