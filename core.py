@@ -39,7 +39,9 @@ def resource(*parts) -> str:
     return os.path.join(base, *parts)
 
 
-CORE_DIR = os.path.join(app_dir(), "core")
+_c1 = os.path.join(app_dir(), "core")                                   # zip / installed layout
+_c2 = os.path.join(getattr(sys, "_MEIPASS", app_dir()), "core")        # single-file portable build
+CORE_DIR = _c1 if os.path.isdir(_c1) else _c2
 DATA_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), APP_NAME)
 os.makedirs(DATA_DIR, exist_ok=True)
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")

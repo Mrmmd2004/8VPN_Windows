@@ -17,7 +17,7 @@ Proxy mode: Windows system proxy -> Aether HTTP 127.0.0.1:1822 -> internet
 ## Build (GitHub Actions)
 1. Upload everything in this folder to the repo root (`Mrmmd2004/8VPN_Windows`).
 2. **Actions -> Build Windows -> Run workflow**.
-3. Download artifact `8VPN-Windows-x64`, unzip, run `8VPN.exe`.
+3. Download artifact `8VPN-Windows`: `8VPN-Setup.exe` (installer), `8VPN-Portable.exe` (single file), `8VPN-Windows-x64.zip` (folder).
 
 ## ساخت (فارسی)
 ۱. همه‌ی فایل‌ها را در ریشه‌ی مخزن آپلود کنید. ۲. Actions ← Build Windows ← Run workflow.
