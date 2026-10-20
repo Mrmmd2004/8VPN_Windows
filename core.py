@@ -85,6 +85,7 @@ DEFAULTS = {
     "socks_port": 1819,
     "http_port": 1822,
     "system_proxy": True,        # proxy mode: also set the Windows system proxy
+    "free_ports": True,          # on connect: close whatever already listens on our ports
     "autostart": False,
     "auto_connect": False,
     "start_minimized": False,
@@ -224,6 +225,63 @@ def port_open(port: int) -> bool:
             return True
     except OSError:
         return False
+
+
+def listening_pids(port: int) -> set:
+    """PIDs that listen on a local TCP port (psutil first, netstat as fallback)."""
+    pids = set()
+    try:
+        import psutil
+        for c in psutil.net_connections(kind="tcp"):
+            if c.status == psutil.CONN_LISTEN and c.laddr and c.laddr.port == port and c.pid:
+                pids.add(c.pid)
+        if pids:
+            return pids
+    except Exception:
+        pass
+    if IS_WIN:
+        try:
+            out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True,
+                                 creationflags=NO_WINDOW, timeout=15).stdout
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and parts[0] == "TCP" and parts[3].upper() == "LISTENING" \
+                        and parts[1].rsplit(":", 1)[-1] == str(port) and parts[4].isdigit():
+                    pids.add(int(parts[4]))
+        except Exception:
+            pass
+    return pids
+
+
+def free_port(port: int, log=print) -> bool:
+    """Kill whatever listens on `port`. Returns True when the port is free afterwards."""
+    if not port_open(port):
+        return True
+    me = os.getpid()
+    for pid in listening_pids(port) - {0, 4, me}:
+        log(f"port {port} is used by PID {pid}, closing it")
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           creationflags=NO_WINDOW, capture_output=True, timeout=15)
+        except Exception as e:
+            log(f"could not close PID {pid}: {e}")
+    for _ in range(20):
+        if not port_open(port):
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def kill_leftovers(log=print):
+    """Close cores left behind by a crashed or force-closed earlier session."""
+    for name in ("aether.exe", "sing-box.exe", "psiphon-tunnel-core.exe", "lyrebird.exe"):
+        try:
+            r = subprocess.run(["taskkill", "/F", "/T", "/IM", name], creationflags=NO_WINDOW,
+                               capture_output=True, timeout=15)
+            if r.returncode == 0:
+                log(f"closed leftover {name}")
+        except Exception:
+            pass
 
 
 def is_admin() -> bool:
@@ -669,7 +727,18 @@ class Controller(QObject):
             if not is_admin():
                 raise Fatal("need_admin")
         r = route_of(s)
-        if any(port_open(p) for p in {s.socks_port, exit_port(s)}):
+        ports = {s.socks_port, exit_port(s)}
+        if s.mode == "proxy" and s.system_proxy:
+            ports.add(s.http_port)
+        if s.free_ports and any(port_open(p) for p in ports):
+            kill_leftovers(self._log)
+            time.sleep(0.5)
+            for p in sorted(ports):
+                if port_open(p):
+                    free_port(p, self._log)
+        busy = [p for p in sorted(ports) if port_open(p)]
+        if busy:
+            self._log("ports still in use: " + ", ".join(map(str, busy)))
             raise Fatal("port_busy")
         self._psiphon_ready = False
 

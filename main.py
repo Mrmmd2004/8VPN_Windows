@@ -685,6 +685,7 @@ class SettingsPage(QWidget):
         number(g, L("mtu"), "mtu", 1280, 9000)
         chips(g, L("stack"), "tun_stack", [("gvisor", "gVisor"), ("system", "system"), ("mixed", "mixed")], False)
         number(g, L("socks"), "socks_port", 1024, 65535)
+        switch(g, L("free_ports"), "free_ports")
         switch(g, L("http_proxy"), "system_proxy")
         number(g, L("http"), "http_port", 1024, 65535)
         action(g, "logs", L("open_logs"), self.win.open_logs)
