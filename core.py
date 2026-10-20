@@ -88,7 +88,7 @@ DEFAULTS = {
     "autostart": False,
     "auto_connect": False,
     "start_minimized": False,
-    "close_to_tray": True,
+    "hide_on_close": False,      # False: the X button quits the app completely
 }
 
 PROTOCOLS = [

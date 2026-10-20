@@ -646,7 +646,7 @@ class SettingsPage(QWidget):
         switch(g, L("autostart"), "autostart")
         switch(g, L("auto_connect"), "auto_connect")
         switch(g, L("start_min"), "start_minimized")
-        switch(g, L("close_tray"), "close_to_tray")
+        switch(g, L("close_tray"), "hide_on_close")
         g.addWidget(label(L("admin_note"), "hint", True))
 
         g = group("sec_core", lock=True)
@@ -946,8 +946,9 @@ class MainWindow(QWidget):
 
     def closeEvent(self, e):
         e.ignore()
-        if S.close_to_tray and self.tray.isVisible():
+        if S.hide_on_close and self.tray.isVisible():
             self.hide()
+            self.tray.showMessage("8 VPN", L("tray_hint"), self.icon, 3000)
         else:
             self.quit_app()
 
@@ -990,7 +991,13 @@ def main():
         w.show()
     if "--connect" in argv or S.auto_connect:
         QTimer.singleShot(700, w.toggle)
-    return app.exec()
+    code = app.exec()
+    # Make sure nothing is left running: stop the cores, restore the proxy, then end the process.
+    try:
+        ctl.shutdown()
+        core.restore_system_proxy()
+    finally:
+        os._exit(code)
 
 
 if __name__ == "__main__":
