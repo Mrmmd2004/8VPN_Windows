@@ -16,6 +16,7 @@ env:
   AETHER_REF: ${{ inputs.aether_ref || 'v2.3.0' }}
   SINGBOX_VERSION: ${{ inputs.singbox_version || '1.13.21' }}
   WINTUN_VERSION: "0.14.1"
+  APP_VERSION: "1.0.0"
 
 jobs:
   build:
@@ -33,25 +34,22 @@ jobs:
         shell: bash
         run: pip install -r requirements.txt pyinstaller
 
-      - name: Download cores (Aether, sing-box, Wintun)
+      - name: Download cores (Aether + pt, sing-box, Wintun)
         shell: bash
-        run: |
-          mkdir -p core dl
-          curl -fL "https://github.com/CluvexStudio/Aether/releases/download/${AETHER_REF}/aether-windows-x86_64.zip" -o dl/aether.zip
-          curl -fL "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-windows-amd64.zip" -o dl/singbox.zip
-          curl -fL "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip" -o dl/wintun.zip
-          7z x dl/aether.zip -odl/aether -y
-          7z x dl/singbox.zip -odl/singbox -y
-          7z x dl/wintun.zip -odl/wintun -y
-          # copy the whole Aether folder: aether.exe + pt/ (Psiphon and Tor transports live there)
-          adir="$(dirname "$(find dl/aether -name aether.exe | head -n1)")"
-          cp -r "$adir"/. core/
-          cp "$(find dl/singbox -name sing-box.exe | head -n1)" core/sing-box.exe
-          cp dl/wintun/wintun/bin/amd64/wintun.dll core/wintun.dll
-          printf 'aether=%s\nsingbox=%s\n' "$AETHER_REF" "$SINGBOX_VERSION" > core/versions.txt
-          find core -maxdepth 2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/prepare_core.py
 
-      - name: Build folder version (8VPN.exe)
+      # Opens every page offscreen and saves screenshots. A failure here does not stop the build,
+      # but the log shows the exact Python error.
+      - name: UI smoke test and screenshots
+        continue-on-error: true
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python tools/smoke_test.py
+
+      - name: Build folder version
         shell: bash
         run: |
           pyinstaller --noconfirm --windowed --name 8VPN \
@@ -70,7 +68,7 @@ jobs:
             --icon assets/icon.ico --add-data "assets;assets" --add-data "core;core" \
             --exclude-module tkinter --exclude-module PyQt6.QtNetwork \
             --exclude-module PyQt6.QtSvg --exclude-module PyQt6.QtQml \
-            --distpath dist-portable --workpath build-portable --specpath build-portable \
+            --distpath dist-portable --workpath build-portable \
             main.py
           ls -la dist-portable
 
@@ -82,7 +80,7 @@ jobs:
             choco install innosetup -y --no-progress
             $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
           }
-          & $iscc "/DAppVersion=1.0.0" installer.iss
+          & $iscc "/DAppVersion=$env:APP_VERSION" installer.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
           Get-ChildItem installer
 
@@ -119,6 +117,14 @@ jobs:
           name: 8VPN-Windows-zip
           path: out/8VPN-Windows-x64.zip
           if-no-files-found: warn
+
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-preview
+          path: preview/*.png
+          if-no-files-found: ignore
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
