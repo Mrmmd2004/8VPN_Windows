@@ -16,6 +16,7 @@ env:
   AETHER_REF: ${{ inputs.aether_ref || 'v2.3.0' }}
   SINGBOX_VERSION: ${{ inputs.singbox_version || '1.13.21' }}
   WINTUN_VERSION: "0.14.1"
+  APP_VERSION: "1.0.0"
 
 jobs:
   build:
@@ -30,26 +31,25 @@ jobs:
           python-version: "3.12"
 
       - name: Install Python packages
-        run: |
-          pip install -r requirements.txt pyinstaller
         shell: bash
+        run: pip install -r requirements.txt pyinstaller
 
-      - name: Download cores (Aether, sing-box, Wintun)
+      - name: Download cores (Aether + pt, sing-box, Wintun)
         shell: bash
-        run: |
-          mkdir -p core dl
-          curl -fL "https://github.com/CluvexStudio/Aether/releases/download/${AETHER_REF}/aether-windows-x86_64.zip" -o dl/aether.zip
-          curl -fL "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VERSION}/sing-box-${SINGBOX_VERSION}-windows-amd64.zip" -o dl/singbox.zip
-          curl -fL "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip" -o dl/wintun.zip
-          7z x dl/aether.zip -odl/aether -y
-          7z x dl/singbox.zip -odl/singbox -y
-          7z x dl/wintun.zip -odl/wintun -y
-          cp "$(find dl/aether -name aether.exe | head -n1)" core/aether.exe
-          cp "$(find dl/singbox -name sing-box.exe | head -n1)" core/sing-box.exe
-          cp dl/wintun/wintun/bin/amd64/wintun.dll core/wintun.dll
-          ls -la core
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/prepare_core.py
 
-      - name: Build 8VPN.exe
+      # Opens every page offscreen and saves screenshots. A failure here does not stop the build,
+      # but the log shows the exact Python error.
+      - name: UI smoke test and screenshots
+        continue-on-error: true
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python tools/smoke_test.py
+
+      - name: Build folder version
         shell: bash
         run: |
           pyinstaller --noconfirm --windowed --name 8VPN \
@@ -59,18 +59,75 @@ jobs:
             main.py
           cp -r core dist/8VPN/core
           cp README.md LICENSE dist/8VPN/
+          ls -la dist/8VPN
 
-      - name: Zip
+      - name: Build portable single-file exe
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name 8VPN-Portable \
+            --icon assets/icon.ico --add-data "assets;assets" --add-data "core;core" \
+            --exclude-module tkinter --exclude-module PyQt6.QtNetwork \
+            --exclude-module PyQt6.QtSvg --exclude-module PyQt6.QtQml \
+            --distpath dist-portable --workpath build-portable \
+            main.py
+          ls -la dist-portable
+
+      - name: Build setup installer (Inno Setup)
         shell: pwsh
-        run: Compress-Archive -Path dist/8VPN -DestinationPath 8VPN-Windows-x64.zip
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+            $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          }
+          & $iscc "/DAppVersion=$env:APP_VERSION" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          Get-ChildItem installer
 
-      - uses: actions/upload-artifact@v4
+      - name: Collect files
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          if (Test-Path dist/8VPN) { Compress-Archive -Path dist/8VPN -DestinationPath out/8VPN-Windows-x64.zip -Force }
+          if (Test-Path dist-portable/8VPN-Portable.exe) { Copy-Item dist-portable/8VPN-Portable.exe out/ }
+          if (Test-Path installer/8VPN-Setup.exe) { Copy-Item installer/8VPN-Setup.exe out/ }
+          Get-ChildItem out
+
+      - name: Upload Setup
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: 8VPN-Windows-x64
-          path: 8VPN-Windows-x64.zip
+          name: 8VPN-Setup
+          path: out/8VPN-Setup.exe
+          if-no-files-found: warn
+
+      - name: Upload Portable
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 8VPN-Portable
+          path: out/8VPN-Portable.exe
+          if-no-files-found: warn
+
+      - name: Upload Zip
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 8VPN-Windows-zip
+          path: out/8VPN-Windows-x64.zip
+          if-no-files-found: warn
+
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-preview
+          path: preview/*.png
+          if-no-files-found: ignore
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: 8VPN-Windows-x64.zip
+          files: out/*
