@@ -8,6 +8,7 @@ Proxy mode: Windows system proxy -> Aether HTTP 127.0.0.1:1822 -> internet
 ```
 
 - Python + PyQt6, dark/light, Persian (RTL) and English, tray icon, logs window
+- Routes like the Android app: Aether, Aether → Psiphon, Aether → Tor, Psiphon only/→ Aether, Tor only/→ Aether, with Psiphon region and Tor bridge options
 - Protocols: WireGuard, MASQUE, Gool, Gool classic, MASQUE-in-MASQUE
 - Smart reconnect (core dies / pings fail), live ping, exit IP, speed (VPN mode)
 - VPN mode asks for administrator rights (UAC); Proxy mode does not

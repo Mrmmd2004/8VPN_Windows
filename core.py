@@ -57,7 +57,11 @@ DEFAULTS = {
     "language": "fa",
     "theme": "dark",
     "mode": "vpn",               # vpn | proxy
+    "route": "aether",           # aether | aether_psiphon | aether_tor | psiphon_only | psiphon_reverse | tor_only | tor_reverse
     "protocol": "wg",            # wg | masque | gool | gool_classic | mim
+    "psiphon_region": "",
+    "psiphon_mode": "auto",      # auto | cdn
+    "tor_bridges": "auto",       # auto | always | never
     "carrier": "h2",             # MASQUE transport: h2 | h3
     "scan": "turbo",
     "noize": "default",
@@ -96,6 +100,44 @@ PROTOCOLS = [
 ]
 
 
+TOR_PORT, PSIPHON_PORT = 1820, 1821
+
+
+class Route:
+    def __init__(self, name, family, psiphon, tor, no_warp, reverse, label):
+        self.name, self.family, self.psiphon, self.tor = name, family, psiphon, tor
+        self.no_warp, self.reverse, self.label = no_warp, reverse, label
+
+    @property
+    def slow(self):
+        return self.psiphon or self.tor
+
+
+ROUTES = {r.name: r for r in (
+    Route("aether", "aether", 0, 0, 0, 0, "Aether"),
+    Route("aether_psiphon", "aether", 1, 0, 0, 0, "Aether → Psiphon"),
+    Route("aether_tor", "aether", 0, 1, 0, 0, "Aether → Tor"),
+    Route("psiphon_only", "psiphon", 1, 0, 1, 0, "Psiphon only"),
+    Route("psiphon_reverse", "psiphon", 1, 0, 0, 1, "Psiphon → Aether"),
+    Route("tor_only", "tor", 0, 1, 1, 0, "Tor only"),
+    Route("tor_reverse", "tor", 0, 1, 0, 1, "Tor → Aether"),
+)}
+
+
+def route_of(s) -> Route:
+    return ROUTES.get(s.route, ROUTES["aether"])
+
+
+def exit_port(s) -> int:
+    """Port whose SOCKS5 listener is the real exit (Psiphon / Tor sit behind their own port)."""
+    r = route_of(s)
+    if r.name == "aether_psiphon":
+        return PSIPHON_PORT
+    if r.name == "aether_tor":
+        return TOR_PORT
+    return s.socks_port
+
+
 class Settings:
     def __init__(self):
         self.d = dict(DEFAULTS)
@@ -129,9 +171,11 @@ class Settings:
 
     def _sanitize(self):
         d = self.d
-        if not (1024 <= d["socks_port"] <= 65535):
+        if not (1024 <= d["socks_port"] <= 65535) or d["socks_port"] in (TOR_PORT, PSIPHON_PORT):
             d["socks_port"] = 1819
-        if not (1024 <= d["http_port"] <= 65535) or d["http_port"] == d["socks_port"]:
+        if d["route"] not in ROUTES:
+            d["route"] = "aether"
+        if not (1024 <= d["http_port"] <= 65535) or d["http_port"] in (d["socks_port"], TOR_PORT, PSIPHON_PORT):
             d["http_port"] = 1822 if d["socks_port"] != 1822 else 1823
         for k in ("max_tries", "ping_fails", "ping_interval", "mtu", "retry_delay_ms"):
             if not isinstance(d[k], int):
@@ -325,48 +369,127 @@ def socks_get(port: int, host: str, path: str, timeout: float = 6.0):
         return None
 
 
+def socks_download(port: int, host: str, path: str, max_bytes: int, budget: float):
+    """Downloads up to max_bytes over plain HTTP through the SOCKS5 port.
+    Returns (status, body bytes, ms) or None."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.settimeout(5)
+            s.sendall(b"\x05\x01\x00")
+            if _read_full(s, 2) != b"\x05\x00":
+                return None
+            hb = host.encode()
+            s.sendall(b"\x05\x01\x00\x03" + bytes([len(hb)]) + hb + b"\x00\x50")
+            h = _read_full(s, 4)
+            if h[1] != 0:
+                return None
+            _read_full(s, {1: 6, 4: 18}.get(h[3]) or (_read_full(s, 1)[0] + 2))
+            t0 = time.perf_counter()
+            s.sendall(f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+            head, body, status, done = b"", 0, 0, False
+            while time.perf_counter() - t0 < budget:
+                try:
+                    c = s.recv(16384)
+                except socket.timeout:
+                    break
+                if not c:
+                    break
+                if not done:
+                    head += c
+                    end = head.find(b"\r\n\r\n")
+                    if end >= 0:
+                        done = True
+                        parts = head.split(b"\r\n", 1)[0].split(b" ")
+                        status = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+                        body = len(head) - (end + 4)
+                    elif len(head) > 8192:
+                        break
+                else:
+                    body += len(c)
+                if done and (status != 200 or body >= max_bytes):
+                    break
+            if not done:
+                return None
+            return status, body, int((time.perf_counter() - t0) * 1000)
+    except OSError:
+        return None
+
+
 # ------------------------------------------------------ Aether / sing-box
+def _pt_bin(name):
+    p = os.path.join(CORE_DIR, "pt", name)
+    return p if os.path.exists(p) else None
+
+
 def aether_args(s: Settings, fresh: bool):
+    r = route_of(s)
     a = ["--config", os.path.join(DATA_DIR, "aether", "aether.toml"),
          "--bind", f"127.0.0.1:{s.socks_port}"]
     if s.mode == "proxy" and s.system_proxy:
         a += ["--http-proxy", f"127.0.0.1:{s.http_port}"]
 
-    proto = s.protocol
-    a += {"wg": ["--protocol", "wg"], "masque": ["--protocol", "masque"],
-          "gool": ["--protocol", "gool"], "gool_classic": ["--gool-classic"],
-          "mim": ["--protocol", "mim"]}[proto]
-    if proto in ("masque", "mim"):
-        a.append("--h2" if s.carrier == "h2" else "--h3")
+    a += {"aether_psiphon": ["--psiphon"], "psiphon_only": ["--psiphon-only"], "psiphon_reverse": ["--psiphon-reverse"],
+          "aether_tor": ["--tor"], "tor_only": ["--tor-only"], "tor_reverse": ["--tor-reverse"]}.get(r.name, [])
 
-    ep, ep2 = clean_endpoint(s.endpoint), clean_endpoint(s.endpoint2)
-    if proto == "masque" and ep:
-        a += ["--peer", ep] + (["--h2-peer", ep] if s.carrier == "h2" else [])
-    elif proto == "wg" and ep:
-        a += ["--peer", ep]
-    elif proto == "gool":
-        if ep: a += ["--peer", ep]
-        if ep2: a += ["--gool-peer", ep2]
-    elif proto == "gool_classic":
-        if ep: a += ["--wiw-outer", ep]
-        if ep2: a += ["--wiw-inner", ep2]
-    elif proto == "mim":
-        if ep: a += ["--mim-outer", ep]
-        if ep2: a += ["--mim-inner", ep2]
+    if not r.no_warp:
+        proto = "masque" if r.reverse else s.protocol  # reverse routes carry MASQUE over HTTP/2
+        a += {"wg": ["--protocol", "wg"], "masque": ["--protocol", "masque"],
+              "gool": ["--protocol", "gool"], "gool_classic": ["--gool-classic"],
+              "mim": ["--protocol", "mim"]}[proto]
+        h2 = r.reverse or s.carrier == "h2"
+        if r.reverse:
+            a.append("--h2")
+        elif proto in ("masque", "mim"):
+            a.append("--h2" if s.carrier == "h2" else "--h3")
 
-    a += ["--scan", s.scan]
-    if s.noize != "default":
-        a += ["--noize", s.noize]
-    a.append({"6": "-6", "dual": "--dual"}.get(s.ip_version, "-4"))
-    a.append("--no-quick-reconnect" if (fresh or not s.quick_reconnect) else "--quick-reconnect")
-    if s.dns.strip():
-        a += ["--dns", csv(s.dns)]
+        ep, ep2 = clean_endpoint(s.endpoint), clean_endpoint(s.endpoint2)
+        if proto == "masque" and ep:
+            a += ["--peer", ep] + (["--h2-peer", ep] if h2 else [])
+        elif proto == "wg" and ep:
+            a += ["--peer", ep]
+        elif proto == "gool":
+            if ep: a += ["--peer", ep]
+            if ep2: a += ["--gool-peer", ep2]
+        elif proto == "gool_classic":
+            if ep: a += ["--wiw-outer", ep]
+            if ep2: a += ["--wiw-inner", ep2]
+        elif proto == "mim":
+            if ep: a += ["--mim-outer", ep]
+            if ep2: a += ["--mim-inner", ep2]
+
+        a += ["--scan", s.scan]
+        if s.noize != "default":
+            a += ["--noize", s.noize]
+        a.append({"6": "-6", "dual": "--dual"}.get(s.ip_version, "-4"))
+        a.append("--no-quick-reconnect" if (fresh or not s.quick_reconnect) else "--quick-reconnect")
+        if s.dns.strip():
+            a += ["--dns", csv(s.dns)]
+
     if s.route_block.strip():
         a += ["--route-block", csv(s.route_block)]
     if s.route_direct.strip():
         a += ["--route-direct", csv(s.route_direct)]
     if s.upstream.strip():
         a += ["--upstream", s.upstream.strip()]
+
+    if r.psiphon:
+        exe = _pt_bin("psiphon-tunnel-core.exe")
+        if exe:
+            a += ["--psiphon-bin", exe]
+        a += ["--psiphon-dir", os.path.join(DATA_DIR, "aether", "psiphon")]
+        if r.name != "psiphon_only":
+            a += ["--psiphon-bind", f"127.0.0.1:{PSIPHON_PORT}"]
+        a += ["--psiphon-mode", s.psiphon_mode]
+        if s.psiphon_region.strip():
+            a += ["--psiphon-region", s.psiphon_region.strip().upper()]
+    if r.tor:
+        a += ["--tor-dir", os.path.join(DATA_DIR, "aether", "tor")]
+        if r.name != "tor_only":
+            a += ["--tor-bind", f"127.0.0.1:{TOR_PORT}"]
+        if s.tor_bridges == "always":
+            a.append("--tor-bridges")
+        elif s.tor_bridges == "never":
+            a.append("--no-tor-bridges")
     if s.perf != "auto":
         a += ["--perf", s.perf]
     a += split_args(s.extra_args)
@@ -374,9 +497,24 @@ def aether_args(s: Settings, fresh: bool):
 
 
 def singbox_config(s: Settings) -> dict:
-    v6 = s.ip_version != "4"
+    r = route_of(s)
+    v6 = s.ip_version != "4" and not r.slow
     addr = ["172.19.0.1/30"] + (["fdfe:dcba:9876::1/126"] if v6 else [])
     dns_server = (csv(s.dns).split(",")[0] if s.dns.strip() else "") or "1.1.1.1"
+    # Everything that runs from the core folder (aether, psiphon, lyrebird, ...) must leave directly.
+    direct_rule = {"process_path_regex": ["(?i)^" + re.escape(CORE_DIR) + r"\\.*"],
+                   "process_name": ["aether.exe", "sing-box.exe", "psiphon-tunnel-core.exe", "lyrebird.exe"],
+                   "outbound": "direct"}
+    rules = [
+        {"action": "sniff"},
+        direct_rule,
+        {"protocol": "dns", "action": "hijack-dns"},
+        # Refuse QUIC so apps fall back to TCP at once instead of waiting on a slow UDP relay.
+        {"network": "udp", "port": 443, "action": "reject"},
+    ]
+    if r.tor:
+        rules.append({"network": "udp", "action": "reject"})  # Tor has no UDP at all
+    rules.append({"ip_is_private": True, "outbound": "direct"})
     return {
         "log": {"level": "warn", "timestamp": True},
         "dns": {
@@ -388,23 +526,10 @@ def singbox_config(s: Settings) -> dict:
             "address": addr, "mtu": s.mtu_v(), "auto_route": True, "stack": s.tun_stack,
         }],
         "outbounds": [
-            {"type": "socks", "tag": "proxy", "server": "127.0.0.1", "server_port": s.socks_port, "version": "5"},
+            {"type": "socks", "tag": "proxy", "server": "127.0.0.1", "server_port": exit_port(s), "version": "5"},
             {"type": "direct", "tag": "direct"},
         ],
-        "route": {
-            "auto_detect_interface": True,
-            "find_process": True,
-            "rules": [
-                {"action": "sniff"},
-                # Aether's own traffic to the gateway must never enter the tunnel (it would loop).
-                {"process_name": ["aether.exe", "sing-box.exe"], "outbound": "direct"},
-                {"protocol": "dns", "action": "hijack-dns"},
-                # Refuse QUIC so apps fall back to TCP at once instead of waiting on a slow UDP relay.
-                {"network": "udp", "port": 443, "action": "reject"},
-                {"ip_is_private": True, "outbound": "direct"},
-            ],
-            "final": "proxy",
-        },
+        "route": {"auto_detect_interface": True, "find_process": True, "rules": rules, "final": "proxy"},
     }
 
 
@@ -420,6 +545,7 @@ class Controller(QObject):
     ping = pyqtSignal(int)              # ms, -1 = unknown
     traffic = pyqtSignal(float, float)  # download B/s, upload B/s
     exit_info = pyqtSignal(str)
+    speed = pyqtSignal(float)           # link speed B/s, -1 = measuring / unknown
 
     def __init__(self):
         super().__init__()
@@ -431,6 +557,7 @@ class Controller(QObject):
         self._aether = None
         self._singbox = None
         self._sb_started = False
+        self._psiphon_ready = False
         self._proxy_on = False
 
     # ---- public
@@ -453,7 +580,7 @@ class Controller(QObject):
             self._set("stopping")
 
     def rescan(self):
-        if self.phase == "connected":
+        if self.phase == "connected" and route_of(S).family == "aether":
             self._rescan.set()
 
     def shutdown(self):
@@ -495,7 +622,7 @@ class Controller(QObject):
                 if ok:
                     first, attempt = False, 0
                     self._set("connected", 0, tries)
-                    threading.Thread(target=self._fetch_exit, args=(s.socks_port,), daemon=True).start()
+                    threading.Thread(target=self._after_connect, args=(exit_port(s),), daemon=True).start()
                     reason = self._monitor(s)
                     if self._stop.is_set():
                         break
@@ -504,6 +631,7 @@ class Controller(QObject):
                     self.ping.emit(-1)
                     self.traffic.emit(0, 0)
                     self.exit_info.emit("")
+                    self.speed.emit(-1)
                     self._teardown()
                     fresh = bool(s.fresh_after_drop) or reason == "rescan"
                     self._sleep(s.retry_s())
@@ -526,6 +654,7 @@ class Controller(QObject):
             self.ping.emit(-1)
             self.traffic.emit(0, 0)
             self.exit_info.emit("")
+            self.speed.emit(-1)
             self._set("idle")
 
     def _bring_up(self, s: Settings, fresh: bool) -> bool:
@@ -539,8 +668,10 @@ class Controller(QObject):
                 raise Fatal("core_missing")
             if not is_admin():
                 raise Fatal("need_admin")
-        if port_open(s.socks_port):
+        r = route_of(s)
+        if any(port_open(p) for p in {s.socks_port, exit_port(s)}):
             raise Fatal("port_busy")
+        self._psiphon_ready = False
 
         # 1) Aether
         args = aether_args(s, fresh)
@@ -551,19 +682,23 @@ class Controller(QObject):
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
         threading.Thread(target=self._pump, args=(self._aether, "aether"), daemon=True).start()
 
-        # Aether opens its SOCKS port only after the tunnel has been validated.
-        limit = 300
+        # First route search may take long on a bad network (Tor most of all).
+        limit = 720 if r.tor else 420 if r.psiphon else 300
+        port = exit_port(s)
         t0 = time.time()
         while not self._stop.is_set() and time.time() - t0 < limit:
             if self._aether.poll() is not None:
                 self._log(f"core exited (code {self._aether.returncode})")
                 return False
-            if port_open(s.socks_port):
+            waited = time.time() - t0
+            # Psiphon / Tor open their port at once; Aether's SOCKS port opens once WARP is validated.
+            if port_open(port) and (port == s.socks_port or port_open(s.socks_port)) \
+                    and (not r.psiphon or self._psiphon_ready or waited > 60):
                 break
             self._sleep(0.5)
         else:
             return False
-        self._log("Aether is ready")
+        self._log("core is ready")
 
         # 2) mode specific part
         if vpn:
@@ -604,9 +739,15 @@ class Controller(QObject):
                 line = raw.decode("utf-8", "replace")
                 if tag == "tun" and "started" in line:
                     self._sb_started = True
+                if tag == "aether" and "psiphon is ready" in line:
+                    self._psiphon_ready = True
                 self._log(("[tun] " if tag == "tun" else "") + line)
         except Exception:
             pass
+
+    def _after_connect(self, port):
+        self._fetch_exit(port)
+        self._speed_test(port)
 
     def _fetch_exit(self, port):
         r = socks_get(port, "www.cloudflare.com", "/cdn-cgi/trace", 15)
@@ -616,6 +757,21 @@ class Controller(QObject):
         ip = info.get("ip")
         if ip:
             self.exit_info.emit(f"{ip} ({info['loc']})" if info.get("loc") else ip)
+
+    def _speed_test(self, port):
+        self._sleep(2)  # let the tunnel settle
+        for host, path in (("speed.cloudflare.com", "/__down?bytes=1000000"),
+                           ("cachefly.cachefly.net", "/1mb.test"),
+                           ("ipv4.download.thinkbroadband.com", "/1MB.zip")):
+            if self._stop.is_set():
+                return
+            r = socks_download(port, host, path, 1_000_000, 10)
+            if r and r[0] == 200 and r[1] > 0 and r[2] > 0:
+                bps = r[1] * 1000 / r[2]
+                self._log(f"Speed test: {int(bps / 1024)} KB/s ({r[1]} bytes in {r[2]} ms via {host})")
+                self.speed.emit(bps)
+                return
+        self._log("Speed test: no result")
 
     def _tun_counters(self):
         try:
@@ -638,8 +794,9 @@ class Controller(QObject):
             if s.mode == "vpn" and (self._singbox is None or self._singbox.poll() is not None):
                 return "tun_exited"
 
-            r = socks_get(s.socks_port, "cp.cloudflare.com", "/generate_204", 6) \
-                or socks_get(s.socks_port, "www.gstatic.com", "/generate_204", 6)
+            xp = exit_port(s)
+            r = socks_get(xp, "cp.cloudflare.com", "/generate_204", 6) \
+                or socks_get(xp, "www.gstatic.com", "/generate_204", 6)
             cur = self._tun_counters()
             now = time.time()
             if cur and last:
