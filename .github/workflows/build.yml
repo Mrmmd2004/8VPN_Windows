@@ -30,9 +30,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install Python packages
-        run: |
-          pip install -r requirements.txt pyinstaller
         shell: bash
+        run: pip install -r requirements.txt pyinstaller
 
       - name: Download cores (Aether, sing-box, Wintun)
         shell: bash
@@ -49,9 +48,10 @@ jobs:
           cp -r "$adir"/. core/
           cp "$(find dl/singbox -name sing-box.exe | head -n1)" core/sing-box.exe
           cp dl/wintun/wintun/bin/amd64/wintun.dll core/wintun.dll
+          printf 'aether=%s\nsingbox=%s\n' "$AETHER_REF" "$SINGBOX_VERSION" > core/versions.txt
           find core -maxdepth 2
 
-      - name: Build 8VPN.exe
+      - name: Build folder version (8VPN.exe)
         shell: bash
         run: |
           pyinstaller --noconfirm --windowed --name 8VPN \
@@ -61,37 +61,64 @@ jobs:
             main.py
           cp -r core dist/8VPN/core
           cp README.md LICENSE dist/8VPN/
+          ls -la dist/8VPN
 
       - name: Build portable single-file exe
         shell: bash
         run: |
           pyinstaller --noconfirm --onefile --windowed --name 8VPN-Portable \
-            --icon assets/icon.ico --add-data "assets;assets" --add-binary "core;core" \
+            --icon assets/icon.ico --add-data "assets;assets" --add-data "core;core" \
             --exclude-module tkinter --exclude-module PyQt6.QtNetwork \
             --exclude-module PyQt6.QtSvg --exclude-module PyQt6.QtQml \
-            --distpath dist-portable --workpath build-portable \
+            --distpath dist-portable --workpath build-portable --specpath build-portable \
             main.py
+          ls -la dist-portable
 
       - name: Build setup installer (Inno Setup)
         shell: pwsh
         run: |
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+            $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          }
           & $iscc "/DAppVersion=1.0.0" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          Get-ChildItem installer
 
       - name: Collect files
+        if: always()
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
-          Compress-Archive -Path dist/8VPN -DestinationPath out/8VPN-Windows-x64.zip
-          Copy-Item dist-portable/8VPN-Portable.exe out/
-          Copy-Item installer/8VPN-Setup.exe out/
+          if (Test-Path dist/8VPN) { Compress-Archive -Path dist/8VPN -DestinationPath out/8VPN-Windows-x64.zip -Force }
+          if (Test-Path dist-portable/8VPN-Portable.exe) { Copy-Item dist-portable/8VPN-Portable.exe out/ }
+          if (Test-Path installer/8VPN-Setup.exe) { Copy-Item installer/8VPN-Setup.exe out/ }
           Get-ChildItem out
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload Setup
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: 8VPN-Windows
-          path: out/*
+          name: 8VPN-Setup
+          path: out/8VPN-Setup.exe
+          if-no-files-found: warn
+
+      - name: Upload Portable
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 8VPN-Portable
+          path: out/8VPN-Portable.exe
+          if-no-files-found: warn
+
+      - name: Upload Zip
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 8VPN-Windows-zip
+          path: out/8VPN-Windows-x64.zip
+          if-no-files-found: warn
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
