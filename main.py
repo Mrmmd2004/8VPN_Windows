@@ -164,7 +164,8 @@ class RegionRow(QPushButton):
     """Flag + country name + chevron, used on Home and in Settings."""
 
     def __init__(self, on_click, enabled=True):
-        super().__init__("", "row")
+        super().__init__("")
+        self.setObjectName("row")
         self.setStyleSheet("QPushButton#row { padding: 0; }")
         self.setMinimumHeight(52)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -188,7 +189,8 @@ class RegionRow(QPushButton):
 
 class SummaryRow(QPushButton):
     def __init__(self, on_click):
-        super().__init__("", "row")
+        super().__init__("")
+        self.setObjectName("row")
         self.setStyleSheet("QPushButton#row { padding: 14px 46px 14px 16px; }" if not rtl() else
                            "QPushButton#row { padding: 14px 16px 14px 46px; text-align: right; }")
         self.setCursor(Qt.CursorShape.PointingHandCursor)

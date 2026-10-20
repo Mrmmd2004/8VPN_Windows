@@ -20,12 +20,23 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORE, DL = os.path.join(ROOT, "core"), os.path.join(ROOT, "dl")
 
 
-def get(url, dest, headers=None):
-    print("GET", url, flush=True)
-    req = urllib.request.Request(url, headers={"User-Agent": "8vpn-build", **(headers or {})})
-    with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as f:
-        shutil.copyfileobj(r, f)
-    print("  ->", os.path.getsize(dest), "bytes", flush=True)
+def get(url, dest, headers=None, tries=4):
+    import time
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) 8vpn-build"
+    last = None
+    for i in range(1, tries + 1):
+        print(f"GET {url} (try {i}/{tries})", flush=True)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": ua, **(headers or {})})
+            with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as f:
+                shutil.copyfileobj(r, f)
+            print("  ->", os.path.getsize(dest), "bytes", flush=True)
+            return
+        except Exception as e:  # noqa: BLE001
+            last = e
+            print("  failed:", e, flush=True)
+            time.sleep(3 * i)
+    raise SystemExit(f"download failed after {tries} tries: {url}\n{last}")
 
 
 def unzip(path, to):
