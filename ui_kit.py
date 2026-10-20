@@ -44,26 +44,20 @@ def qss():
     QLabel#err {{ color: {p['danger']}; font-size: 12px; }}
     QLabel#gtitle {{ color: {p['primary']}; font-weight: 700; font-size: 13px; }}
     QLabel#page {{ font-size: 21px; }}
-    QFrame#card {{ background: {p['card']}; border: 1px solid {p['border']}; border-radius: 22px; }}
-    QFrame#segBox {{ border: 1px solid {p['line']}; border-radius: 22px; }}
-    QFrame#banner {{ background: {p['card2']}; border-radius: 14px; }}
     QPushButton {{ border: none; background: transparent; }}
     QPushButton#link {{ color: {p['primary']}; font-weight: 600; font-size: 14px; padding: 6px 10px; border-radius: 10px; }}
     QPushButton#link:hover {{ background: {p['card2']}; }}
     QPushButton#linkDanger {{ color: {p['danger']}; font-weight: 600; padding: 6px 10px; border-radius: 10px; }}
-    QPushButton#seg {{ border-radius: 20px; padding: 10px 0; font-weight: 600; }}
-    QPushButton#seg[on="true"] {{ background: {p['sel']}; }}
+    QPushButton#seg {{ padding: 10px 0; font-weight: 600; }}
     QPushButton#seg:disabled {{ color: {p['sub']}; }}
-    QPushButton#chip {{ border: 1px solid {p['line']}; border-radius: 16px; padding: 7px 16px; }}
-    QPushButton#chip[on="true"] {{ background: {p['sel']}; border-color: {p['sel']}; font-weight: 600; }}
+    QPushButton#chip {{ padding: 7px 16px; }}
+    QPushButton#chip[on="true"] {{ font-weight: 600; }}
     QPushButton#chip:disabled {{ color: {p['sub']}; }}
-    QPushButton#pill {{ border: 1px solid {p['line']}; border-radius: 22px; padding: 11px 22px; color: {p['primary']}; font-weight: 600; }}
-    QPushButton#pill:hover {{ background: {p['card2']}; }}
+    QPushButton#pill {{ padding: 11px 22px; color: {p['primary']}; font-weight: 600; }}
     QPushButton#pill:disabled {{ color: {p['sub']}; }}
-    QPushButton#row {{ background: {p['card2']}; border-radius: 16px; padding: 14px 16px; text-align: left; }}
+    QPushButton#row {{ padding: 14px 16px; text-align: left; }}
     QPushButton#row:disabled {{ color: {p['sub']}; }}
-    QPushButton#action {{ background: {p['card2']}; border-radius: 16px; padding: 13px 16px; text-align: left; }}
-    QPushButton#action:hover {{ background: {p['sel']}; }}
+    QPushButton#action {{ padding: 13px 16px; text-align: left; }}
     QPushButton#action:disabled {{ color: {p['sub']}; }}
     QPushButton#mono {{ padding: 2px 4px; text-align: left; font-family: Consolas, monospace; font-size: 12px; color: {p['sub']}; }}
     QPushButton#primary {{ background: {p['primary']}; color: {p['onp']}; border-radius: 20px; padding: 10px 22px; font-weight: 700; }}
@@ -280,6 +274,92 @@ def _repolish(w):
     w.style().polish(w)
 
 
+class Card(QFrame):
+    """Rounded panel painted with anti-aliasing. kind: card | banner | pill | seg."""
+
+    def __init__(self, kind="card"):
+        super().__init__()
+        self.kind, self.tint = kind, None
+
+    def paintEvent(self, e):
+        c, k = pal(), self.kind
+        r = QRectF(self.rect()).adjusted(0.75, 0.75, -0.75, -0.75)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if k == "card":
+            fill, border, rad = c["card"], c["border"], 22
+        elif k == "banner":
+            fill, border, rad = c["card2"], None, 14
+        elif k == "seg":
+            fill, border, rad = None, c["line"], r.height() / 2
+        else:  # pill
+            fill, border, rad = None, None, r.height() / 2
+        if k == "pill" and self.tint is not None:
+            t = QColor(self.tint)
+            t.setAlpha(38)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(t)
+            p.drawRoundedRect(r, rad, rad)
+        if fill:
+            p.setPen(QPen(QColor(border), 1) if border else Qt.PenStyle.NoPen)
+            p.setBrush(QColor(fill))
+            p.drawRoundedRect(r, rad, rad)
+        elif border:
+            p.setPen(QPen(QColor(border), 1.3))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(r, rad, rad)
+        p.end()
+        super().paintEvent(e)
+
+
+class Btn(QPushButton):
+    """Button whose rounded shape is painted here (anti-aliased), so every corner is smooth in any state.
+    variant: chip | seg | pill | row | action. QSS only supplies padding, font and text colour."""
+
+    def __init__(self, text="", variant="chip", on=False):
+        super().__init__(text)
+        self.variant = variant
+        self.setObjectName(variant)
+        self.setProperty("on", "true" if on else "false")
+        self._on = on
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def paintEvent(self, e):
+        c, v = pal(), self.variant
+        hover = self.underMouse() and self.isEnabled()
+        fill, border = None, None
+        if v == "chip":
+            fill, border = (c["sel"], None) if self._on else (None, c["line"])
+        elif v == "seg":
+            fill = c["sel"] if self._on else None
+        elif v == "pill":
+            border, fill = c["line"], (c["card2"] if hover else None)
+        elif v == "row":
+            fill = c["card2"]
+        elif v == "action":
+            fill = c["sel"] if hover else c["card2"]
+        r = QRectF(self.rect()).adjusted(0.75, 0.75, -0.75, -0.75)
+        rad = r.height() / 2 if v in ("chip", "seg", "pill") else 16
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if fill:
+            col = QColor(fill)
+            if not self.isEnabled():
+                col.setAlpha(150)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(col)
+            p.drawRoundedRect(r, rad, rad)
+        if border:
+            col = QColor(border)
+            if not self.isEnabled():
+                col.setAlpha(110)
+            p.setPen(QPen(col, 1.3))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(r, rad, rad)
+        p.end()
+        super().paintEvent(e)  # text and child widgets
+
+
 class Chips(QWidget):
     """Wrapping outlined choice chips; the picked one is filled."""
 
@@ -288,21 +368,17 @@ class Chips(QWidget):
         self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         fl = FlowLayout(self)
         for val, text in items:
-            b = QPushButton(text)
-            b.setObjectName("chip")
-            b.setProperty("on", "true" if val == current else "false")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b = Btn(text, "chip", val == current)
             b.setEnabled(enabled)
             b.clicked.connect(lambda _=False, v=val: on_pick(v))
             fl.addWidget(b)
 
 
-class Segmented(QFrame):
+class Segmented(Card):
     """Capsule with equal segments; the picked one is filled and carries a check mark."""
 
     def __init__(self, on_pick):
-        super().__init__()
-        self.setObjectName("segBox")
+        super().__init__("seg")
         self._h = QHBoxLayout(self)
         self._h.setContentsMargins(3, 3, 3, 3)
         self._h.setSpacing(2)
@@ -316,10 +392,7 @@ class Segmented(QFrame):
                 it.widget().deleteLater()
         self.btns = {}
         for val, text in items:
-            b = QPushButton(("✓  " if val == current else "") + text)
-            b.setObjectName("seg")
-            b.setProperty("on", "true" if val == current else "false")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b = Btn(("✓  " if val == current else "") + text, "seg", val == current)
             b.setEnabled(enabled)
             b.clicked.connect(lambda _=False, v=val: self._on(v))
             self._h.addWidget(b, 1)

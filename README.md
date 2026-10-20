@@ -16,6 +16,8 @@ Proxy mode: Windows system proxy -> Aether HTTP 127.0.0.1:1822 -> internet
 - Telegram: <https://t.me/Clubapp8>
 
 ## Build (GitHub Actions)
+The workflow also saves screenshots of every page as the `ui-preview` artifact.
+
 1. Upload everything in this folder to the repo root (`Mrmmd2004/8VPN_Windows`).
 2. **Actions -> Build Windows -> Run workflow**.
 3. Download from the run page: `8VPN-Setup` (installer), `8VPN-Portable` (single file), `8VPN-Windows-zip` (folder).

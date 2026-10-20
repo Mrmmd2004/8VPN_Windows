@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QLineEdi
 
 import core
 from core import S, TELEGRAM, VERSION, Controller
-from ui_kit import (L, Chips, ConnectButton, Icon, IconButton, Segmented, Sheet, Switch, flag_pixmap, fmt_rate,
+from ui_kit import (L, Btn, Card, Chips, ConnectButton, Icon, IconButton, Segmented, Sheet, Switch, flag_pixmap, fmt_rate,
                     paint_icon, pal, qss, rtl)
 
 GITHUB = "https://github.com/Mrmmd2004/8VPN_Windows"
@@ -48,8 +48,7 @@ def active_label():
 
 # ------------------------------------------------------------------ small builders
 def card(margins=(16, 14, 16, 14), spacing=12):
-    f = QFrame()
-    f.setObjectName("card")
+    f = Card("card")
     v = QVBoxLayout(f)
     v.setContentsMargins(*margins)
     v.setSpacing(spacing)
@@ -165,8 +164,7 @@ class RegionRow(QPushButton):
     """Flag + country name + chevron, used on Home and in Settings."""
 
     def __init__(self, on_click, enabled=True):
-        super().__init__()
-        self.setObjectName("row")
+        super().__init__("", "row")
         self.setStyleSheet("QPushButton#row { padding: 0; }")
         self.setMinimumHeight(52)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -190,8 +188,7 @@ class RegionRow(QPushButton):
 
 class SummaryRow(QPushButton):
     def __init__(self, on_click):
-        super().__init__()
-        self.setObjectName("row")
+        super().__init__("", "row")
         self.setStyleSheet("QPushButton#row { padding: 14px 46px 14px 16px; }" if not rtl() else
                            "QPushButton#row { padding: 14px 16px 14px 46px; text-align: right; }")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -253,8 +250,7 @@ class HomePage(QWidget):
         self.btn = ConnectButton(win.toggle)
         v.addWidget(self.btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        self.pill = QFrame()
-        self.pill.setObjectName("pillbox")
+        self.pill = Card("pill")
         pl = QHBoxLayout(self.pill)
         pl.setContentsMargins(16, 6, 16, 6)
         pl.setSpacing(9)
@@ -298,10 +294,8 @@ class HomePage(QWidget):
         self.actions = QWidget()
         al = QHBoxLayout(self.actions)
         al.setContentsMargins(0, 0, 0, 0)
-        self.b_test, self.b_rescan = QPushButton(), QPushButton()
+        self.b_test, self.b_rescan = Btn("", "pill"), Btn("", "pill")
         for b in (self.b_test, self.b_rescan):
-            b.setObjectName("pill")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
             al.addWidget(b)
         self.test_lbl = label("", "sub")
         al.addWidget(self.test_lbl)
@@ -378,7 +372,8 @@ class HomePage(QWidget):
         c = pal()
         color = c["primary"] if live else c["sub"] if idle else c["amber"]
         qc = QColor(color)
-        self.pill.setStyleSheet(f"#pillbox {{ background: rgba({qc.red()},{qc.green()},{qc.blue()},0.14); border-radius: 17px; }}")
+        self.pill.tint = qc
+        self.pill.update()
         self.dot.setStyleSheet(f"color:{color};font-size:11px;")
         self.status.setStyleSheet(f"color:{color};font-size:16px;font-weight:600;")
         self.status.setText(L(ph))
@@ -620,8 +615,7 @@ class SettingsPage(QWidget):
                 lay.addWidget(label(L("endpoint_invalid"), "err", True))
 
         def action(lay, icon, title, fn, danger=False, enabled=True):
-            b = QPushButton()
-            b.setObjectName("action")
+            b = Btn("", "action")
             b.setStyleSheet("QPushButton#action { padding: 0; }")
             b.setMinimumHeight(50)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -641,7 +635,7 @@ class SettingsPage(QWidget):
 
         if locked:
             note, nl = card((16, 12, 16, 12))
-            note.setObjectName("banner")
+            note.kind = "banner"
             nl.addWidget(label(L("locked_hint"), None, True))
             v.addWidget(note)
 
@@ -808,9 +802,7 @@ class AboutPage(QWidget):
 
         c, cl = card((8, 8, 8, 8), 2)
         for title, url in ((L("github"), GITHUB), (L("telegram"), TELEGRAM)):
-            b = QPushButton(title)
-            b.setObjectName("action")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b = Btn(title, "action")
             b.clicked.connect(lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
             cl.addWidget(b)
         v.addWidget(c)
