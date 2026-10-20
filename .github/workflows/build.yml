@@ -44,10 +44,12 @@ jobs:
           7z x dl/aether.zip -odl/aether -y
           7z x dl/singbox.zip -odl/singbox -y
           7z x dl/wintun.zip -odl/wintun -y
-          cp "$(find dl/aether -name aether.exe | head -n1)" core/aether.exe
+          # copy the whole Aether folder: aether.exe + pt/ (Psiphon and Tor transports live there)
+          adir="$(dirname "$(find dl/aether -name aether.exe | head -n1)")"
+          cp -r "$adir"/. core/
           cp "$(find dl/singbox -name sing-box.exe | head -n1)" core/sing-box.exe
           cp dl/wintun/wintun/bin/amd64/wintun.dll core/wintun.dll
-          ls -la core
+          find core -maxdepth 2
 
       - name: Build 8VPN.exe
         shell: bash
