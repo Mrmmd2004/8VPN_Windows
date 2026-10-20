@@ -24,9 +24,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -96,7 +96,7 @@ jobs:
 
       - name: Upload Setup
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: 8VPN-Setup
           path: out/8VPN-Setup.exe
@@ -104,7 +104,7 @@ jobs:
 
       - name: Upload Portable
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: 8VPN-Portable
           path: out/8VPN-Portable.exe
@@ -112,7 +112,7 @@ jobs:
 
       - name: Upload Zip
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: 8VPN-Windows-zip
           path: out/8VPN-Windows-x64.zip
@@ -120,7 +120,7 @@ jobs:
 
       - name: Upload UI screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ui-preview
           path: preview/*.png
