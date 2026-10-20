@@ -902,6 +902,8 @@ class Controller(QObject):
         if self._proxy_on:
             restore_system_proxy()
             self._proxy_on = False
+        if IS_WIN:  # Psiphon/Tor helpers can outlive aether.exe and keep ports busy
+            kill_leftovers(lambda m: None)
 
     @staticmethod
     def _kill(p):

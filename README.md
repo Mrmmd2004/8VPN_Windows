@@ -13,6 +13,7 @@ Proxy mode: Windows system proxy -> Aether HTTP 127.0.0.1:1822 -> internet
 - Smart reconnect (core dies / pings fail), live ping, exit IP, speed (VPN mode)
 - VPN mode asks for administrator rights (UAC); Proxy mode does not
 - Credits: [Aether](https://github.com/CluvexStudio/Aether) (AGPL-3.0), [sing-box](https://github.com/SagerNet/sing-box), [Wintun](https://www.wintun.net). Licence: AGPL-3.0.
+- Android version: <https://github.com/Mrmmd2004/8vpn>
 - Telegram: <https://t.me/Clubapp8>
 
 ## Build (GitHub Actions)

@@ -1,5 +1,6 @@
 import ctypes
 import os
+import re
 import shutil
 import sys
 import threading
@@ -17,6 +18,7 @@ from ui_kit import (L, Btn, Card, Chips, ConnectButton, Icon, IconButton, Segmen
                     paint_icon, pal, qss, rtl)
 
 GITHUB = "https://github.com/Mrmmd2004/8VPN_Windows"
+GITHUB_ANDROID = "https://github.com/Mrmmd2004/8vpn"
 
 REGIONS = {
     "AT": ("Austria", "اتریش"), "AU": ("Australia", "استرالیا"), "BE": ("Belgium", "بلژیک"),
@@ -25,7 +27,7 @@ REGIONS = {
     "DK": ("Denmark", "دانمارک"), "EE": ("Estonia", "استونی"), "ES": ("Spain", "اسپانیا"),
     "FI": ("Finland", "فنلاند"), "FR": ("France", "فرانسه"), "GB": ("United Kingdom", "بریتانیا"),
     "HR": ("Croatia", "کرواسی"), "HU": ("Hungary", "مجارستان"), "IE": ("Ireland", "ایرلند"),
-    "IN": ("India", "هند"), "IT": ("Italy", "ایتالیا"), "JP": ("Japan", "ژاپن"), "LV": ("Latvia", "لتونی"),
+    "ID": ("Indonesia", "اندونزی"), "IN": ("India", "هند"), "IT": ("Italy", "ایتالیا"), "JP": ("Japan", "ژاپن"), "LT": ("Lithuania", "لیتوانی"), "LV": ("Latvia", "لتونی"),
     "NL": ("Netherlands", "هلند"), "NO": ("Norway", "نروژ"), "PL": ("Poland", "لهستان"),
     "RO": ("Romania", "رومانی"), "RS": ("Serbia", "صربستان"), "SE": ("Sweden", "سوئد"),
     "SG": ("Singapore", "سنگاپور"), "SK": ("Slovakia", "اسلواکی"), "UA": ("Ukraine", "اوکراین"),
@@ -257,8 +259,11 @@ class HomePage(QWidget):
         pl.setContentsMargins(16, 6, 16, 6)
         pl.setSpacing(9)
         self.dot, self.status = QLabel("●"), QLabel()
+        self.flag = QLabel()
+        self.flag.hide()
         pl.addWidget(self.dot)
         pl.addWidget(self.status)
+        pl.addWidget(self.flag)
         v.addWidget(self.pill, 0, Qt.AlignmentFlag.AlignHCenter)
         self.sub = label("", wrap=True)
         self.sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -409,7 +414,22 @@ class HomePage(QWidget):
         for k, t in vals.items():
             self.st[k][1].setText(t)
 
+    def update_flag(self):
+        """Exit-country flag next to the status while connected through Psiphon."""
+        m = re.search(r"\(([A-Za-z]{2})\)\s*$", self._exit or "")
+        cc = m.group(1).upper() if m else ""
+        pm = flag_pixmap(cc, 26) if cc and self.ctl.phase == "connected" and core.route_of(S).psiphon else None
+        if pm is None or pm.isNull():
+            self.flag.hide()
+            return
+        if self.flag.property("cc") != cc:
+            self.flag.setPixmap(pm)
+            self.flag.setToolTip(region_name(cc))
+            self.flag.setProperty("cc", cc)
+        self.flag.show()
+
     def update_status_line(self):
+        self.update_flag()
         ph, c = self.ctl.phase, pal()
         if ph == "reconnecting" or (ph == "connecting" and self._attempt > 1):
             txt, col = L("attempt", a=self._attempt, t=self._tries), c["amber"]
@@ -804,7 +824,7 @@ class AboutPage(QWidget):
         v.addWidget(c)
 
         c, cl = card((8, 8, 8, 8), 2)
-        for title, url in ((L("github"), GITHUB), (L("telegram"), TELEGRAM)):
+        for title, url in ((L("github"), GITHUB), (L("github_android"), GITHUB_ANDROID), (L("telegram"), TELEGRAM)):
             b = Btn(title, "action")
             b.clicked.connect(lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
             cl.addWidget(b)
