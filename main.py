@@ -1,398 +1,23 @@
 import ctypes
-import math
+import os
+import shutil
 import sys
+import threading
 import time
 
-from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import (QAction, QColor, QDesktopServices, QFont, QIcon, QLinearGradient, QPainter,
-                         QPainterPath, QPen, QRadialGradient)
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
-                             QLabel, QLayout, QLineEdit, QListWidget, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
+from PyQt6.QtCore import QPoint, QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QAction, QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPen
+from PyQt6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+                             QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
                              QSystemTrayIcon, QVBoxLayout, QWidget)
 
 import core
 from core import S, TELEGRAM, VERSION, Controller
-from i18n import tr
+from ui_kit import (L, Chips, ConnectButton, Icon, IconButton, Segmented, Sheet, Switch, flag_pixmap, fmt_rate,
+                    paint_icon, pal, qss, rtl)
 
-PAL = {
-    "dark": dict(bg="#0A0E1A", card="#131A2B", card2="#1B2438", text="#E8EAF6", sub="#A9B1CC",
-                 border="#263050", primary="#8D9BFF", teal="#3DDBC4", amber="#FFB84D", danger="#FF8A8A", pc="#2A3487"),
-    "light": dict(bg="#F4F6FC", card="#FFFFFF", card2="#EEF1FA", text="#151A2C", sub="#586080",
-                  border="#DDE2F0", primary="#4F5BD5", teal="#0FA58F", amber="#D98200", danger="#D93A3A", pc="#E0E3FF"),
-}
+GITHUB = "https://github.com/Mrmmd2004/8VPN_Windows"
 
-
-def pal():
-    return PAL.get(S.theme, PAL["dark"])
-
-
-def L(key, **kw):
-    return tr(S.language, key, **kw)
-
-
-def qss():
-    p = pal()
-    return f"""
-    * {{ font-family: 'Segoe UI', Tahoma, sans-serif; font-size: 13px; color: {p['text']}; }}
-    QDialog, #root {{ background: transparent; }}
-    #dlg {{ background: {p['bg']}; }}
-    QLabel {{ background: transparent; }}
-    #sub {{ color: {p['sub']}; }}
-    #card {{ background: {p['card']}; border: 1px solid {p['border']}; border-radius: 14px; }}
-    #cardTitle {{ color: {p['sub']}; font-size: 11px; }}
-    #cardValue {{ font-size: 15px; font-weight: 600; }}
-    #section {{ color: {p['primary']}; font-weight: 700; font-size: 12px; margin-top: 10px; }}
-    QPushButton {{ background: {p['card']}; border: 1px solid {p['border']}; border-radius: 10px; padding: 7px 14px; }}
-    QPushButton:hover {{ background: {p['card2']}; }}
-    QPushButton:disabled {{ color: {p['sub']}; }}
-    QPushButton#icon {{ border: none; background: transparent; padding: 4px 9px; border-radius: 8px; font-size: 15px; }}
-    QPushButton#icon:hover {{ background: {p['card2']}; }}
-    QPushButton#seg {{ border-radius: 10px; border: none; background: transparent; padding: 8px 0; color: {p['sub']}; }}
-    QPushButton#seg[on="true"] {{ background: {p['primary']}; color: {p['bg']}; font-weight: 700; }}
-    QFrame#segBox {{ background: {p['card']}; border: 1px solid {p['border']}; border-radius: 12px; }}
-    QComboBox, QLineEdit, QSpinBox {{ background: {p['card']}; border: 1px solid {p['border']}; border-radius: 10px;
-        padding: 6px 10px; min-height: 20px; selection-background-color: {p['primary']}; }}
-    QComboBox:disabled, QLineEdit:disabled, QSpinBox:disabled {{ color: {p['sub']}; }}
-    QComboBox::drop-down {{ border: none; width: 22px; }}
-    QComboBox QAbstractItemView {{ background: {p['card']}; border: 1px solid {p['border']};
-        selection-background-color: {p['primary']}; selection-color: {p['bg']}; outline: none; }}
-    QCheckBox {{ spacing: 8px; }}
-    QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 6px; border: 1px solid {p['border']}; background: {p['card']}; }}
-    QCheckBox::indicator:checked {{ background: {p['primary']}; border-color: {p['primary']}; }}
-    QPushButton#chip {{ border-radius: 16px; padding: 6px 14px; background: transparent; }}
-    QPushButton#chip[on="true"] {{ background: {p['pc']}; border-color: {p['primary']}; color: {p['primary']}; font-weight: 600; }}
-    QPushButton#link {{ border: none; background: transparent; color: {p['primary']}; font-weight: 600; font-size: 14px; }}
-    QPushButton#link:hover {{ background: {p['card2']}; }}
-    QPushButton#row {{ background: {p['card2']}; border: none; border-radius: 12px; padding: 12px 14px; text-align: left; }}
-    QPushButton#pill {{ background: {p['pc']}; border: none; border-radius: 16px; padding: 7px 16px; color: {p['primary']}; }}
-    QPushButton#pill:disabled {{ color: {p['sub']}; }}
-    QPushButton#mono {{ background: {p['card']}; border: 1px solid {p['border']}; border-radius: 14px; padding: 10px 14px;
-        text-align: left; font-family: Consolas, monospace; font-size: 11px; color: {p['sub']}; }}
-    QListWidget {{ background: {p['card']}; border: 1px solid {p['border']}; border-radius: 12px; outline: none; }}
-    QListWidget::item {{ padding: 9px 12px; }}
-    QListWidget::item:selected {{ background: {p['pc']}; color: {p['primary']}; }}
-    QPlainTextEdit {{ background: {p['card']}; border: 1px solid {p['border']}; border-radius: 12px;
-        font-family: Consolas, monospace; font-size: 11px; }}
-    QScrollArea {{ border: none; background: transparent; }}
-    QScrollBar:vertical {{ width: 8px; background: transparent; }}
-    QScrollBar::handle:vertical {{ background: {p['border']}; border-radius: 4px; min-height: 30px; }}
-    QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
-    QMenu {{ background: {p['card']}; border: 1px solid {p['border']}; padding: 4px; }}
-    QMenu::item {{ padding: 6px 18px; border-radius: 6px; }}
-    QMenu::item:selected {{ background: {p['card2']}; }}
-    """
-
-
-def fmt_rate(b: float) -> str:
-    if b < 0:
-        return "—"
-    if b >= 1048576:
-        return f"{b / 1048576:.1f} MB/s"
-    if b >= 1024:
-        return f"{b / 1024:.0f} KB/s"
-    return f"{b:.0f} B/s"
-
-
-# ---------------------------------------------------------------- widgets
-class ConnectButton(QWidget):
-    """Round power button: idle ring, spinning arc while busy, soft pulse while connected."""
-
-    def __init__(self, on_click):
-        super().__init__()
-        self.setFixedSize(190, 190)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._click = on_click
-        self.phase = "idle"
-        self._t = 0.0
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._tick)
-        self._timer.start(33)
-
-    def set_phase(self, phase):
-        self.phase = phase
-        self.update()
-
-    def _tick(self):
-        self._t += 0.033
-        if self.phase != "idle":
-            self.update()
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self._click()
-
-    def paintEvent(self, _):
-        p = pal()
-        qp = QPainter(self)
-        qp.setRenderHint(QPainter.RenderHint.Antialiasing)
-        c = QPointF(self.width() / 2, self.height() / 2)
-        busy = self.phase in ("connecting", "reconnecting", "stopping")
-        live = self.phase == "connected"
-        teal, prim, amber = QColor(p["teal"]), QColor(p["primary"]), QColor(p["amber"])
-
-        if live:  # glow
-            pulse = 0.5 + 0.5 * math.sin(self._t * 2.2)
-            g = QRadialGradient(c, 92)
-            col = QColor(teal)
-            col.setAlpha(int(60 + 50 * pulse))
-            g.setColorAt(0.55, col)
-            col.setAlpha(0)
-            g.setColorAt(1.0, col)
-            qp.setPen(Qt.PenStyle.NoPen)
-            qp.setBrush(g)
-            qp.drawEllipse(c, 92, 92)
-
-        r = 68
-        rect = QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
-        grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        if live:
-            grad.setColorAt(0, teal)
-            grad.setColorAt(1, prim)
-        elif busy:
-            grad.setColorAt(0, QColor(p["card2"]))
-            grad.setColorAt(1, QColor(p["card"]))
-        else:
-            grad.setColorAt(0, QColor(p["card2"]))
-            grad.setColorAt(1, QColor(p["card"]))
-        qp.setPen(QPen(QColor(p["border"]), 1))
-        qp.setBrush(grad)
-        qp.drawEllipse(rect)
-
-        if busy:  # spinning arc
-            pen = QPen(amber, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-            qp.setPen(pen)
-            qp.setBrush(Qt.BrushStyle.NoBrush)
-            ring = QRectF(c.x() - r - 9, c.y() - r - 9, 2 * r + 18, 2 * r + 18)
-            qp.drawArc(ring, int(-self._t * 300 * 16), 100 * 16)
-        else:
-            ring_col = QColor(teal if live else p["border"])
-            qp.setPen(QPen(ring_col, 3))
-            qp.setBrush(Qt.BrushStyle.NoBrush)
-            qp.drawEllipse(QRectF(c.x() - r - 9, c.y() - r - 9, 2 * r + 18, 2 * r + 18))
-
-        # power icon
-        icon_col = QColor(p["bg"]) if live else (amber if busy else QColor(p["sub"]))
-        qp.setPen(QPen(icon_col, 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        ir = 24
-        qp.drawArc(QRectF(c.x() - ir, c.y() - ir + 3, 2 * ir, 2 * ir), 120 * 16, 300 * 16)
-        qp.drawLine(QPointF(c.x(), c.y() - ir - 4), QPointF(c.x(), c.y() - 2))
-
-
-class StatCard(QFrame):
-    def __init__(self):
-        super().__init__()
-        self.setObjectName("card")
-        v = QVBoxLayout(self)
-        v.setContentsMargins(14, 10, 14, 10)
-        v.setSpacing(2)
-        self.t = QLabel()
-        self.t.setObjectName("cardTitle")
-        self.v = QLabel("—")
-        self.v.setObjectName("cardValue")
-        v.addWidget(self.t)
-        v.addWidget(self.v)
-
-
-class Segmented(QFrame):
-    def __init__(self, items, on_change):
-        super().__init__()
-        self.setObjectName("segBox")
-        h = QHBoxLayout(self)
-        h.setContentsMargins(4, 4, 4, 4)
-        h.setSpacing(4)
-        self.btns, self._cb = {}, on_change
-        for key in items:
-            b = QPushButton()
-            b.setObjectName("seg")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(lambda _, k=key: self._cb(k))
-            self.btns[key] = b
-            h.addWidget(b)
-
-    def set_value(self, value, labels):
-        for k, b in self.btns.items():
-            b.setText(labels[k])
-            b.setProperty("on", "true" if k == value else "false")
-            b.style().unpolish(b)
-            b.style().polish(b)
-
-
-# ---------------------------------------------------------------- dialogs
-class Dialog(QDialog):
-    def __init__(self, parent, title_key):
-        super().__init__(parent)
-        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, False)
-        self.setWindowIcon(parent.windowIcon())
-        self.title_key = title_key
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if S.language == "fa" else Qt.LayoutDirection.LeftToRight)
-        self.setObjectName("dlg")
-        self.setWindowTitle(L(title_key))
-
-
-class LogsDialog(Dialog):
-    def __init__(self, parent, ctl):
-        super().__init__(parent, "logs")
-        self.ctl = ctl
-        self.resize(560, 420)
-        v = QVBoxLayout(self)
-        self.view = QPlainTextEdit()
-        self.view.setReadOnly(True)
-        self.view.setMaximumBlockCount(600)
-        self.view.setPlainText("\n".join(ctl.logs))
-        v.addWidget(self.view)
-        h = QHBoxLayout()
-        for key, fn in (("copy", self.copy), ("clear", self.clear)):
-            b = QPushButton(L(key))
-            b.clicked.connect(fn)
-            h.addWidget(b)
-        h.addStretch()
-        b = QPushButton(L("close"))
-        b.clicked.connect(self.close)
-        h.addWidget(b)
-        v.addLayout(h)
-        ctl.log.connect(self.view.appendPlainText)
-        self.setStyleSheet(qss())
-
-    def copy(self):
-        QApplication.clipboard().setText(self.view.toPlainText())
-
-    def clear(self):
-        self.ctl.logs.clear()
-        self.view.clear()
-
-    def closeEvent(self, e):
-        try:
-            self.ctl.log.disconnect(self.view.appendPlainText)
-        except TypeError:
-            pass
-        super().closeEvent(e)
-
-
-class SettingsDialog(Dialog):
-    def __init__(self, parent, ctl):
-        super().__init__(parent, "settings")
-        self.main, self.ctl = parent, ctl
-        self.resize(400, 640)
-        self.root = QVBoxLayout(self)
-        self.build()
-
-    def clear(self):
-        while self.root.count():
-            it = self.root.takeAt(0)
-            if it.widget():
-                it.widget().deleteLater()
-
-    def build(self):
-        self.clear()
-        self.setStyleSheet(qss())
-        self.setWindowTitle(L("settings"))
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if S.language == "fa" else Qt.LayoutDirection.LeftToRight)
-        locked = self.ctl.running
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget()
-        body.setObjectName("dlg")
-        self.form = QVBoxLayout(body)
-        self.form.setSpacing(8)
-        scroll.setWidget(body)
-        self.root.addWidget(scroll)
-        f = self.form
-
-        def section(key):
-            lab = QLabel(L(key))
-            lab.setObjectName("section")
-            f.addWidget(lab)
-
-        def row(label_key, widget):
-            h = QHBoxLayout()
-            h.addWidget(QLabel(L(label_key)), 1)
-            h.addWidget(widget, 1)
-            f.addLayout(h)
-
-        def combo(key, items, label_for=None, locked_=False):
-            c = QComboBox()
-            for val, text in items:
-                c.addItem(text, val)
-            c.setCurrentIndex(max(0, c.findData(S.d[key])))
-            c.currentIndexChanged.connect(lambda _, c=c, k=key: self.save(k, c.currentData()))
-            c.setEnabled(not locked_)
-            return c
-
-        def check(key, label_key, locked_=False):
-            c = QCheckBox(L(label_key))
-            c.setChecked(bool(S.d[key]))
-            c.toggled.connect(lambda v, k=key: self.save(k, v))
-            c.setEnabled(not locked_)
-            f.addWidget(c)
-
-        def text(key, locked_=False):
-            e = QLineEdit(str(S.d[key]))
-            e.textChanged.connect(lambda v, k=key: self.save(k, v, apply=False))
-            e.setEnabled(not locked_)
-            return e
-
-        def spin(key, lo, hi, locked_=False):
-            e = QSpinBox()
-            e.setRange(lo, hi)
-            e.setValue(int(S.d[key]))
-            e.valueChanged.connect(lambda v, k=key: self.save(k, v, apply=False))
-            e.setEnabled(not locked_)
-            return e
-
-        section("sec_general")
-        row("language", combo("language", [("fa", "فارسی"), ("en", "English")]))
-        row("theme", combo("theme", [("dark", L("dark")), ("light", L("light"))]))
-        check("autostart", "autostart")
-        check("auto_connect", "auto_connect")
-        check("start_minimized", "start_min")
-        check("close_to_tray", "close_tray")
-
-        section("sec_conn")
-        if locked:
-            note = QLabel(L("locked"))
-            note.setObjectName("sub")
-            note.setWordWrap(True)
-            f.addWidget(note)
-        row("carrier", combo("carrier", [("h2", "HTTP/2 (TCP)"), ("h3", "HTTP/3 (QUIC)")], locked_=locked))
-        row("scan", combo("scan", [(x, x) for x in ("turbo", "balanced", "thorough", "verified", "ironclad")], locked_=locked))
-        row("noize", combo("noize", [("default", L("default"))] + [(x, x) for x in ("off", "light", "firewall", "balanced", "gfw", "aggressive")], locked_=locked))
-        row("ipv", combo("ip_version", [("4", "IPv4"), ("6", "IPv6"), ("dual", "IPv4 + IPv6")], locked_=locked))
-        row("dns", text("dns", locked))
-        row("endpoint", text("endpoint", locked))
-        row("endpoint2", text("endpoint2", locked))
-        check("quick_reconnect", "quick", locked)
-        check("fresh_after_drop", "fresh", locked)
-        check("system_proxy", "sys_proxy", locked)
-
-        section("sec_net")
-        row("socks", spin("socks_port", 1024, 65535, locked))
-        row("http", spin("http_port", 1024, 65535, locked))
-        row("mtu", spin("mtu", 1280, 9000, locked))
-        row("stack", combo("tun_stack", [("gvisor", "gVisor"), ("system", "system"), ("mixed", "mixed")], locked_=locked))
-
-        section("sec_adv")
-        row("tries", spin("max_tries", 1, 999, locked))
-        row("pingfails", spin("ping_fails", 1, 20, locked))
-        row("perf", combo("perf", [(x, x) for x in ("auto", "low", "medium", "high")], locked_=locked))
-        row("extra", text("extra_args", locked))
-        f.addStretch()
-
-        b = QPushButton(L("close"))
-        b.clicked.connect(self.close)
-        self.root.addWidget(b)
-
-    def save(self, key, value, apply=True):
-        S.set(**{key: value})
-        if key == "autostart":
-            core.set_autostart(bool(value))
-        if apply and key in ("language", "theme"):
-            self.main.refresh()
-            QTimer.singleShot(0, self.build)
-        elif apply and key in ("socks_port", "http_port"):
-            self.main.refresh()
-
-
-# ---------------------------------------------------------------- main window
 REGIONS = {
     "AT": ("Austria", "اتریش"), "AU": ("Australia", "استرالیا"), "BE": ("Belgium", "بلژیک"),
     "BG": ("Bulgaria", "بلغارستان"), "BR": ("Brazil", "برزیل"), "CA": ("Canada", "کانادا"),
@@ -406,11 +31,12 @@ REGIONS = {
     "SG": ("Singapore", "سنگاپور"), "SK": ("Slovakia", "اسلواکی"), "UA": ("Ukraine", "اوکراین"),
     "US": ("United States", "ایالات متحده"),
 }
+ROUTE_LABEL = {k: r.label for k, r in core.ROUTES.items()}
 
 
 def region_name(cc):
     n = REGIONS.get(cc.upper())
-    return f"{cc.upper()} · {n[1] if S.language == 'fa' else n[0]}" if n else cc.upper()
+    return f"{n[1] if rtl() else n[0]}  ({cc.upper()})" if n else cc.upper()
 
 
 def active_label():
@@ -420,185 +46,255 @@ def active_label():
             "psiphon_reverse": "Psiphon → MASQUE (HTTP/2)", "tor_reverse": "Tor → MASQUE (HTTP/2)"}.get(r.name, r.label)
 
 
-class FlowLayout(QLayout):
-    def __init__(self, parent=None, spacing=8):
-        super().__init__(parent)
-        self._items = []
-        self.setSpacing(spacing)
-        self.setContentsMargins(0, 0, 0, 0)
-
-    def addItem(self, it): self._items.append(it)
-    def count(self): return len(self._items)
-    def itemAt(self, i): return self._items[i] if 0 <= i < len(self._items) else None
-    def takeAt(self, i): return self._items.pop(i) if 0 <= i < len(self._items) else None
-    def expandingDirections(self): return Qt.Orientation(0)
-    def hasHeightForWidth(self): return True
-    def heightForWidth(self, w): return self._do(QRect(0, 0, w, 0), True)
-
-    def setGeometry(self, r):
-        super().setGeometry(r)
-        self._do(r, False)
-
-    def sizeHint(self): return self.minimumSize()
-
-    def minimumSize(self):
-        sz = QSize()
-        for it in self._items:
-            sz = sz.expandedTo(it.minimumSize())
-        return sz
-
-    def _do(self, rect, test):
-        x, y, lh, sp = rect.x(), rect.y(), 0, self.spacing()
-        for it in self._items:
-            sh = it.sizeHint()
-            if x + sh.width() > rect.right() + 1 and lh > 0:
-                x, y, lh = rect.x(), y + lh + sp, 0
-            if not test:
-                it.setGeometry(QRect(QPoint(x, y), sh))
-            x += sh.width() + sp
-            lh = max(lh, sh.height())
-        return y + lh - rect.y()
+# ------------------------------------------------------------------ small builders
+def card(margins=(16, 14, 16, 14), spacing=12):
+    f = QFrame()
+    f.setObjectName("card")
+    v = QVBoxLayout(f)
+    v.setContentsMargins(*margins)
+    v.setSpacing(spacing)
+    return f, v
 
 
-class RegionDialog(Dialog):
+def label(text, name=None, wrap=False):
+    lab = QLabel(text)
+    if name:
+        lab.setObjectName(name)
+    lab.setWordWrap(wrap)
+    return lab
+
+
+def field(title, widget):
+    box = QWidget()
+    v = QVBoxLayout(box)
+    v.setContentsMargins(0, 0, 0, 0)
+    v.setSpacing(7)
+    v.addWidget(label(title, "sub"))
+    v.addWidget(widget)
+    return box
+
+
+def inline_row(title, widget):
+    box = QWidget()
+    h = QHBoxLayout(box)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.addWidget(QLabel(title), 1)
+    h.addWidget(widget)
+    return box
+
+
+def page_header(title, back, actions=()):
+    h = QHBoxLayout()
+    b = IconButton("back", 42, 2.4)
+    b.clicked.connect(back)
+    h.addWidget(b)
+    t = label(title, "page")
+    h.addWidget(t, 1)
+    for a in actions:
+        h.addWidget(a)
+    return h
+
+
+def scrolling(widget_layout_owner):
+    sc = QScrollArea()
+    sc.setWidgetResizable(True)
+    sc.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    sc.setWidget(widget_layout_owner)
+    return sc
+
+
+class ConfirmSheet(Sheet):
+    def __init__(self, parent, title, text, ok_text, on_ok):
+        super().__init__(parent, title)
+        self.v.addWidget(label(text, "sub", True))
+        h = QHBoxLayout()
+        h.addStretch()
+        for txt, name, fn in ((L("cancel"), "link", self.reject), (ok_text, "linkDanger", lambda: (on_ok(), self.accept()))):
+            b = QPushButton(txt)
+            b.setObjectName(name)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(fn)
+            h.addWidget(b)
+        self.v.addLayout(h)
+
+
+class RegionSheet(Sheet):
     def __init__(self, parent, current, on_pick):
-        super().__init__(parent, "pick_region")
-        self.resize(340, 520)
+        super().__init__(parent, L("region"), 380)
         self._pick = on_pick
-        v = QVBoxLayout(self)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText(L("search"))
+        self.v.addWidget(self.search)
         self.list = QListWidget()
-        self.list.addItem("🌐  " + L("region_auto"))
-        self.list.item(0).setData(Qt.ItemDataRole.UserRole, "")
-        for cc in REGIONS:
-            self.list.addItem(region_name(cc))
-            self.list.item(self.list.count() - 1).setData(Qt.ItemDataRole.UserRole, cc)
-        for i in range(self.list.count()):
-            if self.list.item(i).data(Qt.ItemDataRole.UserRole) == current.upper():
-                self.list.setCurrentRow(i)
+        self.list.setIconSize(QSize(40, 27))
+        self.list.setFixedHeight(340)
+        rows = [("", L("region_auto"), "")] + [(cc, region_name(cc), " ".join(REGIONS[cc]).lower() + cc.lower()) for cc in REGIONS]
+        for cc, text, hay in rows:
+            it = QListWidgetItem(text)
+            it.setIcon(QIcon(flag_pixmap(cc, 40)))
+            it.setData(Qt.ItemDataRole.UserRole, cc)
+            it.setData(Qt.ItemDataRole.UserRole + 1, hay or "auto")
+            it.setSizeHint(QSize(0, 42))
+            self.list.addItem(it)
+            if cc == current.upper():
+                self.list.setCurrentItem(it)
         self.list.itemClicked.connect(self.picked)
-        v.addWidget(self.list)
-        self.setStyleSheet(qss())
+        self.search.textChanged.connect(self.filter)
+        self.v.addWidget(self.list)
+        h = QHBoxLayout()
+        h.addStretch()
+        b = QPushButton(L("cancel"))
+        b.setObjectName("link")
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.clicked.connect(self.reject)
+        h.addWidget(b)
+        self.v.addLayout(h)
 
-    def picked(self, item):
-        self._pick(item.data(Qt.ItemDataRole.UserRole))
-        self.close()
+    def filter(self, q):
+        q = q.strip().lower()
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            it.setHidden(bool(q) and q not in it.data(Qt.ItemDataRole.UserRole + 1))
+
+    def picked(self, it):
+        self._pick(it.data(Qt.ItemDataRole.UserRole))
+        self.accept()
 
 
-class MainWindow(QWidget):
+class RegionRow(QPushButton):
+    """Flag + country name + chevron, used on Home and in Settings."""
+
+    def __init__(self, on_click, enabled=True):
+        super().__init__()
+        self.setObjectName("row")
+        self.setStyleSheet("QPushButton#row { padding: 0; }")
+        self.setMinimumHeight(52)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setEnabled(enabled)
+        self.clicked.connect(on_click)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(16, 8, 16, 8)
+        h.setSpacing(12)
+        cc = S.psiphon_region
+        flag = QLabel()
+        flag.setPixmap(flag_pixmap(cc, 34))
+        text = QLabel(region_name(cc) if cc else L("region_auto"))
+        for w in (flag, text):
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        chev = Icon("down", 20)
+        chev.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        h.addWidget(flag)
+        h.addWidget(text, 1)
+        h.addWidget(chev)
+
+
+class SummaryRow(QPushButton):
+    def __init__(self, on_click):
+        super().__init__()
+        self.setObjectName("row")
+        self.setStyleSheet("QPushButton#row { padding: 14px 46px 14px 16px; }" if not rtl() else
+                           "QPushButton#row { padding: 14px 16px 14px 46px; text-align: right; }")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clicked.connect(on_click)
+        self.kind = "down"
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        p = QPainter(self)
+        x = 12 if rtl() else self.width() - 40
+        paint_icon(p, self.kind, QRectF(x, (self.height() - 24) / 2, 28, 24), QColor(pal()["sub"]), 2.2)
+
+
+# ------------------------------------------------------------------ pages
+class HomePage(QWidget):
     pinged = pyqtSignal(object)
 
-    def __init__(self, ctl: Controller):
+    def __init__(self, win):
         super().__init__()
-        self.ctl = ctl
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(410, 740)
-        self.setWindowTitle("8 VPN")
-        self.icon = QIcon(core.resource("assets", "icon.png"))
-        self.setWindowIcon(self.icon)
-        self._drag = None
-        self._since = None
-        self._err = ""
-        self._reason = ""
+        self.win, self.ctl = win, win.ctl
+        self._err = self._reason = ""
         self._attempt, self._tries = 0, 3
         self._ping, self._rx, self._tx, self._speed, self._exit = -1, 0.0, 0.0, -1.0, ""
-        self._panel_open = False
-        self._testing, self._test_res = False, ""
-        self._logs = self._settings = self._region = None
+        self._since, self._panel_open, self._testing = None, False, False
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        self.body = QFrame()
-        self.body.setObjectName("root")
-        outer.addWidget(self.body)
-        root = QVBoxLayout(self.body)
-        root.setContentsMargins(18, 12, 10, 12)
-        root.setSpacing(6)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 0, 8, 10)
+        root.setSpacing(4)
 
-        # ---- title bar (fixed)
         top = QHBoxLayout()
-        logo = QLabel()
-        logo.setPixmap(self.icon.pixmap(30, 30))
+        self.logo = QLabel()
+        self.logo.setPixmap(win.icon.pixmap(36, 36))
         title = QLabel("8 VPN")
-        title.setStyleSheet("font-size:19px;font-weight:700;")
-        top.addWidget(logo)
+        title.setStyleSheet("font-size:25px;")
+        top.addWidget(self.logo)
+        top.addSpacing(6)
         top.addWidget(title)
         top.addStretch()
-        self.b_logs, self.b_set = QPushButton(), QPushButton()
-        for b, fn in ((self.b_logs, self.open_logs), (self.b_set, self.open_settings)):
-            b.setObjectName("link")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(fn)
-            top.addWidget(b)
-        bmin, bx = QPushButton("—"), QPushButton("✕")
-        for b, fn in ((bmin, self.showMinimized), (bx, self.close)):
-            b.setObjectName("icon")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(fn)
-            top.addWidget(b)
+        self.b_logs = QPushButton()
+        self.b_logs.setObjectName("link")
+        self.b_logs.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.b_logs.clicked.connect(win.open_logs)
+        self.b_set = IconButton("gear", 42, 2.0)
+        self.b_set.clicked.connect(win.open_settings)
+        top.addWidget(self.b_logs)
+        top.addWidget(self.b_set)
         root.addLayout(top)
 
-        # ---- scrolling content
+        inner = QWidget()
         sc = QScrollArea()
         sc.setWidgetResizable(True)
         sc.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        inner = QWidget()
-        inner.setObjectName("root")
         sc.setWidget(inner)
         root.addWidget(sc)
         v = QVBoxLayout(inner)
-        v.setContentsMargins(0, 0, 8, 0)
-        v.setSpacing(10)
+        v.setContentsMargins(0, 4, 12, 8)
+        v.setSpacing(12)
 
-        self.btn = ConnectButton(self.toggle)
+        self.btn = ConnectButton(win.toggle)
         v.addWidget(self.btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.pill = QFrame()
         self.pill.setObjectName("pillbox")
         pl = QHBoxLayout(self.pill)
-        pl.setContentsMargins(14, 5, 14, 5)
-        pl.setSpacing(8)
+        pl.setContentsMargins(16, 6, 16, 6)
+        pl.setSpacing(9)
         self.dot, self.status = QLabel("●"), QLabel()
         pl.addWidget(self.dot)
         pl.addWidget(self.status)
         v.addWidget(self.pill, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.sub = QLabel()
-        self.sub.setWordWrap(True)
+        self.sub = label("", wrap=True)
         self.sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.drop = QLabel()
-        self.drop.setObjectName("sub")
-        self.drop.setWordWrap(True)
+        self.drop = label("", "hint", True)
         self.drop.setAlignment(Qt.AlignmentFlag.AlignCenter)
         v.addWidget(self.sub)
         v.addWidget(self.drop)
 
-        # ---- stats
-        self.stats = QFrame()
-        self.stats.setObjectName("card")
-        sl = QHBoxLayout(self.stats)
-        sl.setContentsMargins(6, 14, 6, 14)
+        # stats
+        self.stats, sl = card((8, 16, 8, 16), 0)
+        row = QHBoxLayout()
+        sl.addLayout(row)
         self.st = {}
-        for key, glyph in (("ping", "⚡"), ("download", "↓"), ("upload", "↑"), ("link_speed", "◉")):
+        for key in ("ping", "download", "upload", "link_speed"):
             col = QVBoxLayout()
-            col.setSpacing(3)
-            g, val, lab = QLabel(glyph), QLabel("—"), QLabel()
-            g.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            val.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            val.setStyleSheet("font-size:13px;font-weight:600;")
-            lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lab.setObjectName("cardTitle")
-            for w in (g, val, lab):
-                col.addWidget(w)
-            sl.addLayout(col, 1)
-            self.st[key] = (g, val, lab)
+            col.setSpacing(5)
+            lab, val = QLabel(), QLabel("—")
+            for w in (lab, val):
+                w.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lab.setObjectName("sub")
+            val.setStyleSheet("font-size:14px;font-weight:600;")
+            col.addWidget(lab)
+            col.addWidget(val)
+            row.addLayout(col, 1)
+            self.st[key] = (lab, val)
         v.addWidget(self.stats)
 
-        self.proxy_card = QLabel()
-        self.proxy_card.setObjectName("card")
-        self.proxy_card.setStyleSheet("font-family:Consolas,monospace;font-size:11px;padding:12px;")
+        self.proxy_card, pc = card((16, 12, 16, 12))
+        self.proxy_lbl = QLabel()
+        self.proxy_lbl.setStyleSheet("font-family:Consolas,monospace;font-size:12px;")
+        pc.addWidget(self.proxy_lbl)
         v.addWidget(self.proxy_card)
 
-        # ---- actions (connected only)
+        # actions
         self.actions = QWidget()
         al = QHBoxLayout(self.actions)
         al.setContentsMargins(0, 0, 0, 0)
@@ -607,58 +303,39 @@ class MainWindow(QWidget):
             b.setObjectName("pill")
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             al.addWidget(b)
-        self.test_lbl = QLabel()
-        self.test_lbl.setObjectName("sub")
+        self.test_lbl = label("", "sub")
         al.addWidget(self.test_lbl)
         al.addStretch()
         self.b_test.clicked.connect(self.run_ping)
-        self.b_rescan.clicked.connect(ctl.rescan)
+        self.b_rescan.clicked.connect(self.ctl.rescan)
         self.pinged.connect(self.on_pinged)
         v.addWidget(self.actions)
 
-        # ---- setup card
-        self.setup = QFrame()
-        self.setup.setObjectName("card")
-        sv = QVBoxLayout(self.setup)
-        sv.setContentsMargins(12, 12, 12, 12)
-        sv.setSpacing(10)
-        self.seg_mode = Segmented(["vpn", "proxy"], self.set_mode)
-        self.seg_fam = Segmented(["aether", "psiphon", "tor"], self.set_family)
-        self.summary = QPushButton()
-        self.summary.setObjectName("row")
-        self.summary.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.summary.clicked.connect(self.toggle_panel)
-        self.hint = QLabel()
-        self.hint.setObjectName("sub")
-        self.hint.setWordWrap(True)
+        # mode + core family
+        self.seg_mode = Segmented(self.set_mode)
+        self.seg_fam = Segmented(self.set_family)
+        v.addWidget(self.seg_mode)
+        v.addWidget(self.seg_fam)
+
+        self.setup, sv = card((12, 12, 12, 14), 12)
+        self.summary = SummaryRow(self.toggle_panel)
+        self.hint = label("", "hint", True)
         self.panel = QWidget()
         self.panel_l = QVBoxLayout(self.panel)
-        self.panel_l.setContentsMargins(2, 0, 2, 0)
-        self.panel_l.setSpacing(10)
-        for w in (self.seg_mode, self.seg_fam, self.summary, self.hint, self.panel):
+        self.panel_l.setContentsMargins(4, 0, 4, 0)
+        self.panel_l.setSpacing(14)
+        for w in (self.summary, self.hint, self.panel):
             sv.addWidget(w)
         v.addWidget(self.setup)
 
-        # ---- recent log + footer
-        self.logcard = QPushButton()
-        self.logcard.setObjectName("mono")
-        self.logcard.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.logcard.clicked.connect(self.open_logs)
-        v.addWidget(self.logcard)
-        foot = QHBoxLayout()
-        self.tg = QPushButton()
-        self.tg.setObjectName("link")
-        self.tg.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.tg.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(TELEGRAM)))
-        ver = QLabel(f"v{VERSION}")
-        ver.setObjectName("sub")
-        foot.addWidget(self.tg)
-        foot.addStretch()
-        foot.addWidget(ver)
-        v.addLayout(foot)
+        self.logbtn = QPushButton()
+        self.logbtn.setObjectName("mono")
+        self.logbtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.logbtn.clicked.connect(win.open_logs)
+        v.addWidget(self.logbtn)
         v.addStretch()
 
-        # ---- controller signals
+        ctl = self.ctl
         ctl.status.connect(self.on_status)
         ctl.message.connect(self.on_message)
         ctl.ping.connect(self.on_ping)
@@ -667,112 +344,62 @@ class MainWindow(QWidget):
         ctl.speed.connect(self.on_speed)
         ctl.log.connect(self.on_log)
 
-        # ---- tray
-        self.tray = QSystemTrayIcon(self.icon, self)
-        self.tray.activated.connect(lambda r: self.toggle_window() if r == QSystemTrayIcon.ActivationReason.Trigger else None)
-        self.tray_menu = QMenu()
-        self.a_show, self.a_toggle, self.a_quit = QAction(), QAction(), QAction()
-        self.a_show.triggered.connect(self.show_window)
-        self.a_toggle.triggered.connect(self.toggle)
-        self.a_quit.triggered.connect(self.quit_app)
-        for a in (self.a_show, self.a_toggle):
-            self.tray_menu.addAction(a)
-        self.tray_menu.addSeparator()
-        self.tray_menu.addAction(self.a_quit)
-        self.tray.setContextMenu(self.tray_menu)
-        self.tray.show()
-
         self.clock = QTimer(self)
         self.clock.timeout.connect(self.update_status_line)
         self.clock.start(1000)
 
-        self.refresh()
-
-    # ---- window chrome
-    def paintEvent(self, _):
-        p = pal()
-        qp = QPainter(self)
-        qp.setRenderHint(QPainter.RenderHint.Antialiasing)
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 20, 20)
-        qp.fillPath(path, QColor(p["bg"]))
-        qp.setPen(QPen(QColor(p["border"]), 1))
-        qp.drawPath(path)
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton and e.position().y() < 56:
-            self._drag = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
-
-    def mouseMoveEvent(self, e):
-        if self._drag is not None and e.buttons() & Qt.MouseButton.LeftButton:
-            self.move(e.globalPosition().toPoint() - self._drag)
-
-    def mouseReleaseEvent(self, _):
-        self._drag = None
-
-    # ---- state
+    # ---- helpers
     @property
     def idle(self):
         return self.ctl.phase == "idle"
 
-    def _set(self, **kw):
+    def set_state(self, **kw):
         for k, val in kw.items():
             setattr(self, "_" + k, val)
         self.update_stats()
         self.update_status_line()
 
+    # ---- full render
     def refresh(self):
-        """Full re-render: language, theme, settings."""
-        QApplication.instance().setStyleSheet(qss())
-        rtl = S.language == "fa"
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if rtl else Qt.LayoutDirection.LeftToRight)
         self.b_logs.setText(L("logs"))
-        self.b_set.setText(L("settings"))
-        self.tg.setText("✈  @Clubapp8")
         self.b_test.setText(L("ping_testing") if self._testing else L("ping_test"))
-        self.b_rescan.setText("↻  " + L("rescan"))
-        for key, (g, _, lab) in self.st.items():
+        self.b_rescan.setText(L("rescan"))
+        for key, (lab, _) in self.st.items():
             lab.setText(L(key))
-            g.setStyleSheet(f"color:{pal()['teal']};font-size:15px;")
-        self.a_show.setText(L("tray_show"))
-        self.a_quit.setText(L("tray_quit"))
-        self.seg_mode.set_value(S.mode, {"vpn": L("vpn"), "proxy": L("proxy")})
-        self.seg_fam.set_value(core.route_of(S).family,
-                               {"aether": L("core_aether"), "psiphon": L("core_psiphon"), "tor": L("core_tor")})
+        self.seg_mode.set_items([("vpn", L("vpn")), ("proxy", L("proxy"))], S.mode, self.idle)
+        fam = core.route_of(S).family
+        self.seg_fam.set_items([("aether", L("core_aether")), ("psiphon", L("core_psiphon")), ("tor", L("core_tor"))], fam, self.idle)
         self.build_panel()
         self.update_all()
-        self.update()
 
     def update_all(self):
         ph, idle = self.ctl.phase, self.idle
         live = ph == "connected"
-        color = {"connected": pal()["teal"], "idle": pal()["sub"]}.get(ph, pal()["amber"])
+        c = pal()
+        color = c["primary"] if live else c["sub"] if idle else c["amber"]
         qc = QColor(color)
-        self.pill.setStyleSheet(f"#pillbox {{ background: rgba({qc.red()},{qc.green()},{qc.blue()},0.14); border-radius: 15px; }}")
-        self.dot.setStyleSheet(f"color:{color};font-size:10px;")
-        self.status.setStyleSheet(f"color:{color};font-size:15px;font-weight:600;")
-        self.status.setText(L({"idle": "idle"}.get(ph, ph)))
+        self.pill.setStyleSheet(f"#pillbox {{ background: rgba({qc.red()},{qc.green()},{qc.blue()},0.14); border-radius: 17px; }}")
+        self.dot.setStyleSheet(f"color:{color};font-size:11px;")
+        self.status.setStyleSheet(f"color:{color};font-size:16px;font-weight:600;")
+        self.status.setText(L(ph))
         self.btn.set_phase(ph)
         self.proxy_card.setVisible(S.mode == "proxy")
-        self.proxy_card.setText(L("proxy_info", a=f"127.0.0.1:{S.socks_port}") +
-                                (("    " + L("http_info", a=f"127.0.0.1:{S.http_port}")) if S.system_proxy else ""))
+        self.proxy_lbl.setText(L("proxy_info", a=f"127.0.0.1:{S.socks_port}") +
+                               (("     " + L("http_info", a=f"127.0.0.1:{S.http_port}")) if S.system_proxy else ""))
         self.actions.setVisible(live)
         self.b_rescan.setVisible(core.route_of(S).family == "aether")
         self.hint.setVisible(not idle)
         self.hint.setText(L("locked_hint"))
         self.panel.setVisible(self._panel_open and idle)
-        mode = L("mode_summary_vpn") if S.mode == "vpn" else L("mode_summary_proxy")
-        arrow = "🔒" if not idle else ("▴" if self._panel_open else "▾")
-        self.summary.setText(f"{mode}  ·  {active_label()}    {arrow}")
+        mode = L("vpn") if S.mode == "vpn" else L("proxy")
+        self.summary.setText(f"{mode}  ·  {active_label()}")
+        self.summary.kind = "lock" if not idle else ("up" if self._panel_open else "down")
         self.summary.setEnabled(idle)
-        for seg in (self.seg_mode, self.seg_fam):
-            for b in seg.btns.values():
-                b.setEnabled(idle)
-        self.a_toggle.setText(L("tray_disconnect") if not idle else L("tray_connect"))
+        self.summary.update()
         self.drop.setText(L("last_drop", r=self._reason) if self._reason and idle else "")
         self.update_stats()
         self.update_status_line()
-        self.update_logcard()
+        self.update_logs()
 
     def update_stats(self):
         live = self.ctl.phase == "connected"
@@ -786,101 +413,65 @@ class MainWindow(QWidget):
             self.st[k][1].setText(t)
 
     def update_status_line(self):
-        ph = self.ctl.phase
-        amber, danger, sub = pal()["amber"], pal()["danger"], pal()["sub"]
+        ph, c = self.ctl.phase, pal()
         if ph == "reconnecting" or (ph == "connecting" and self._attempt > 1):
-            txt, col = L("attempt", a=self._attempt, t=self._tries), amber
+            txt, col = L("attempt", a=self._attempt, t=self._tries), c["amber"]
         elif ph == "idle" and self._err:
-            txt, col = self._err, danger
+            txt, col = self._err, c["danger"]
         elif ph == "idle":
-            txt, col = L("tap"), sub
+            txt, col = L("tap"), c["sub"]
         elif ph == "connected":
             t = int(time.time() - self._since) if self._since else 0
-            parts = [active_label()]
-            if self._exit:
-                parts.append(self._exit)
+            parts = [active_label()] + ([self._exit] if self._exit else [])
             parts.append(f"{t // 3600:02d}:{t % 3600 // 60:02d}:{t % 60:02d}")
-            txt, col = "  ·  ".join(parts), sub
+            txt, col = "  ·  ".join(parts), c["sub"]
         else:
-            txt, col = "", sub
+            txt, col = "", c["sub"]
         self.sub.setText(txt)
         self.sub.setStyleSheet(f"color:{col};")
 
-    def update_logcard(self):
+    def update_logs(self):
         lines = list(self.ctl.logs)[-2:]
-        self.logcard.setVisible(bool(lines))
-        fm = self.logcard.fontMetrics()
-        self.logcard.setText("\n".join(fm.elidedText(l, Qt.TextElideMode.ElideRight, 330) for l in lines))
-        self.logcard.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.logbtn.setVisible(bool(lines))
+        fm = self.logbtn.fontMetrics()
+        self.logbtn.setText("\n".join(fm.elidedText(l, Qt.TextElideMode.ElideRight, 340) for l in lines))
+        self.logbtn.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
 
-    # ---- panel (route / protocol / region ...)
-    def chips(self, items, current, on_pick):
-        w = QWidget()
-        w.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        fl = FlowLayout(w)
-        for val, text in items:
-            b = QPushButton(text)
-            b.setObjectName("chip")
-            b.setProperty("on", "true" if val == current else "false")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(lambda _, x=val: on_pick(x))
-            fl.addWidget(b)
-        return w
-
-    def field(self, title, widget):
-        box = QWidget()
-        bl = QVBoxLayout(box)
-        bl.setContentsMargins(0, 0, 0, 0)
-        bl.setSpacing(6)
-        lab = QLabel(title)
-        lab.setObjectName("sub")
-        bl.addWidget(lab)
-        bl.addWidget(widget)
-        return box
-
-    def region_button(self):
-        cc = S.psiphon_region
-        b = QPushButton(("🌐  " + L("region_auto")) if not cc else region_name(cc))
-        b.setObjectName("row")
-        b.setCursor(Qt.CursorShape.PointingHandCursor)
-        b.clicked.connect(self.pick_region)
-        return self.field(L("region"), b)
-
+    # ---- panel
     def build_panel(self):
         while self.panel_l.count():
             it = self.panel_l.takeAt(0)
             if it.widget():
                 it.widget().deleteLater()
-        r = core.route_of(S)
-        add = self.panel_l.addWidget
-        route_pick = lambda x: self.setv(route=x)
+        r, add = core.route_of(S), self.panel_l.addWidget
+        pick_route = lambda x: self.put(route=x)
+        route = lambda keys: field(L("route"), Chips([(k, ROUTE_LABEL[k]) for k in keys], r.name, pick_route))
         if r.family == "aether":
-            add(self.field(L("route"), self.chips([(k, ROUTE_LABEL[k]) for k in ("aether", "aether_psiphon", "aether_tor")], r.name, route_pick)))
+            add(route(("aether", "aether_psiphon", "aether_tor")))
             if r.name == "aether_psiphon":
-                add(self.region_button())
-            add(self.field(L("protocol"), self.chips(core.PROTOCOLS, S.protocol, lambda x: self.setv(protocol=x))))
+                add(field(L("region"), RegionRow(self.pick_region)))
+            add(field(L("protocol"), Chips(core.PROTOCOLS, S.protocol, lambda x: self.put(protocol=x))))
             if S.protocol in ("masque", "mim"):
-                add(self.field(L("transport"), self.chips([("h3", "HTTP/3 (QUIC)"), ("h2", "HTTP/2 (TCP)")], S.carrier, lambda x: self.setv(carrier=x))))
+                add(field(L("transport"), Chips([("h3", "HTTP/3 (QUIC)"), ("h2", "HTTP/2 (TCP)")], S.carrier, lambda x: self.put(carrier=x))))
         elif r.family == "psiphon":
-            add(self.field(L("route"), self.chips([(k, ROUTE_LABEL[k]) for k in ("psiphon_only", "psiphon_reverse")], r.name, route_pick)))
-            add(self.region_button())
-            add(self.field(L("psiphon_mode"), self.chips([("auto", L("auto")), ("cdn", "CDN")], S.psiphon_mode, lambda x: self.setv(psiphon_mode=x))))
+            add(route(("psiphon_only", "psiphon_reverse")))
+            add(field(L("region"), RegionRow(self.pick_region)))
+            add(field(L("psiphon_mode"), Chips([("auto", L("auto")), ("cdn", "CDN")], S.psiphon_mode, lambda x: self.put(psiphon_mode=x))))
         else:
-            add(self.field(L("route"), self.chips([(k, ROUTE_LABEL[k]) for k in ("tor_only", "tor_reverse")], r.name, route_pick)))
-            add(self.field(L("bridges"), self.chips([("auto", L("auto")), ("always", L("always")), ("never", L("never"))], S.tor_bridges, lambda x: self.setv(tor_bridges=x))))
+            add(route(("tor_only", "tor_reverse")))
+            add(field(L("bridges"), Chips([("auto", L("auto")), ("always", L("always")), ("never", L("never"))], S.tor_bridges, lambda x: self.put(tor_bridges=x))))
 
-    def setv(self, **kw):
-        if not self.idle:
-            return
-        S.set(**kw)
-        self.refresh()
+    def put(self, **kw):
+        if self.idle:
+            S.set(**kw)
+            self.win.refresh()
 
     def set_mode(self, mode):
-        self.setv(mode=mode)
+        self.put(mode=mode)
 
     def set_family(self, fam):
         if core.route_of(S).family != fam:
-            self.setv(route={"aether": "aether", "psiphon": "psiphon_only", "tor": "tor_only"}[fam])
+            self.put(route={"aether": "aether", "psiphon": "psiphon_only", "tor": "tor_only"}[fam])
 
     def toggle_panel(self):
         self._panel_open = not self._panel_open
@@ -888,25 +479,7 @@ class MainWindow(QWidget):
 
     def pick_region(self):
         if self.idle:
-            self._region = RegionDialog(self, S.psiphon_region, lambda cc: self.setv(psiphon_region=cc))
-            self._region.show()
-
-    # ---- actions
-    def toggle(self):
-        if self.ctl.phase == "idle":
-            self._err = ""
-            if S.mode == "vpn" and not core.is_admin():
-                self._err = L("need_admin_ask")
-                self.update_status_line()
-                if core.relaunch_as_admin(["--connect"]):
-                    QTimer.singleShot(300, self.quit_app)
-                else:
-                    self._err = L("admin_denied")
-                    self.update_status_line()
-                return
-            self.ctl.start()
-        elif self.ctl.phase != "stopping":
-            self.ctl.stop()
+            RegionSheet(self.win, S.psiphon_region, lambda cc: self.put(psiphon_region=cc)).exec()
 
     def run_ping(self):
         if self._testing or self.ctl.phase != "connected":
@@ -918,7 +491,6 @@ class MainWindow(QWidget):
         def work():
             r = core.socks_get(port, "cp.cloudflare.com", "/generate_204", 8)
             self.pinged.emit(r[0] if r else None)
-        import threading
         threading.Thread(target=work, daemon=True).start()
 
     def on_pinged(self, ms):
@@ -931,13 +503,440 @@ class MainWindow(QWidget):
             self.test_lbl.setText(L("ms", v=ms))
             self.update_stats()
 
-    def open_logs(self):
-        self._logs = LogsDialog(self, self.ctl)
-        self._logs.show()
+    # ---- controller callbacks
+    def on_status(self, phase, attempt, tries):
+        if attempt:
+            self._attempt, self._tries = attempt, tries
+        self._since = (self._since or time.time()) if phase == "connected" else None
+        if phase == "connected":
+            self._reason = ""
+        if phase == "idle":
+            self._ping, self._rx, self._tx, self._speed, self._exit = -1, 0.0, 0.0, -1.0, ""
+            self.test_lbl.setText("")
+        self.refresh()
 
-    def open_settings(self):
-        self._settings = SettingsDialog(self, self.ctl)
-        self._settings.show()
+    def on_message(self, key):
+        if not key or key == "stopped":
+            self._err = ""
+        elif key in ("ping_failed", "core_exited", "tun_exited", "rescan"):
+            self._reason = L("rescan_msg" if key == "rescan" else key)
+            self._err = ""
+        else:
+            self._err = L(key)
+        self.update_status_line()
+
+    def on_ping(self, ms): self.set_state(ping=ms)
+    def on_traffic(self, rx, tx): self.set_state(rx=rx, tx=tx)
+    def on_exit(self, text): self.set_state(exit=text)
+    def on_speed(self, bps): self.set_state(speed=bps)
+    def on_log(self, _line): self.update_logs()
+
+
+class SettingsPage(QWidget):
+    def __init__(self, win):
+        super().__init__()
+        self.win, self.ctl = win, win.ctl
+        self.root = QVBoxLayout(self)
+        self.root.setContentsMargins(16, 0, 8, 10)
+        self.scroll = None
+        self._note = ""
+
+    def put(self, key, value, rebuild=False):
+        S.set(**{key: value})
+        if key == "autostart":
+            core.set_autostart(bool(value))
+        if key in ("language", "theme"):
+            self.win.refresh()
+        elif rebuild:
+            self.build()
+            self.win.home.refresh()
+
+    def build(self):
+        keep = self.scroll.verticalScrollBar().value() if self.scroll else 0
+        while self.root.count():
+            it = self.root.takeAt(0)
+            if it.layout():
+                while it.layout().count():
+                    w = it.layout().takeAt(0).widget()
+                    if w:
+                        w.deleteLater()
+            elif it.widget():
+                it.widget().deleteLater()
+        about = IconButton("info", 42, 2.0)
+        about.clicked.connect(self.win.open_about)
+        self.root.addLayout(page_header(L("settings"), self.win.go_home, [about]))
+
+        locked = self.ctl.phase != "idle"
+        body = QWidget()
+        v = QVBoxLayout(body)
+        v.setContentsMargins(0, 6, 10, 10)
+        v.setSpacing(14)
+        self.scroll = scrolling(body)
+        self.root.addWidget(self.scroll)
+
+        def group(title_key, *, lock=False):
+            gl = label(L(title_key), "gtitle")
+            fr, lay = card((16, 16, 16, 16), 16)
+            lay.setSpacing(16)
+            v.addWidget(gl)
+            v.addWidget(fr)
+            fr.setEnabled(not (lock and locked))
+            return lay
+
+        def chips(lay, title, key, items, rebuild=True):
+            lay.addWidget(field(title, Chips(items, S.d[key], lambda x, k=key: self.put(k, x, rebuild))))
+
+        def switch(lay, title, key):
+            sw = Switch(bool(S.d[key]))
+            sw.toggled.connect(lambda val, k=key: self.put(k, bool(val)))
+            lay.addWidget(inline_row(title, sw))
+
+        def number(lay, title, key, lo, hi):
+            sp = QSpinBox()
+            sp.setRange(lo, hi)
+            sp.setValue(int(S.d[key]))
+            sp.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+            sp.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            sp.setFixedWidth(110)
+            sp.valueChanged.connect(lambda val, k=key: self.put(k, int(val)))
+            lay.addWidget(inline_row(title, sp))
+
+        def text(lay, title, key, hint="", endpoint=False):
+            e = QLineEdit(str(S.d[key]))
+            e.setPlaceholderText(hint)
+
+            def changed(val, k=key):
+                val = val.strip()
+                self.put(k, val)
+                if endpoint:
+                    bad = bool(val) and core.clean_endpoint(val) is None
+                    e.setProperty("bad", "true" if bad else "false")
+                    e.style().unpolish(e)
+                    e.style().polish(e)
+            e.textChanged.connect(changed)
+            lay.addWidget(field(title, e))
+            if endpoint and S.d[key] and core.clean_endpoint(S.d[key]) is None:
+                e.setProperty("bad", "true")
+                lay.addWidget(label(L("endpoint_invalid"), "err", True))
+
+        def action(lay, icon, title, fn, danger=False, enabled=True):
+            b = QPushButton()
+            b.setObjectName("action")
+            b.setStyleSheet("QPushButton#action { padding: 0; }")
+            b.setMinimumHeight(50)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setEnabled(enabled)
+            b.clicked.connect(fn)
+            h = QHBoxLayout(b)
+            h.setContentsMargins(16, 8, 16, 8)
+            h.setSpacing(12)
+            ic = Icon(icon, 22, "danger" if danger else "primary", 2.0)
+            t = QLabel(title)
+            t.setStyleSheet(f"color:{pal()['danger'] if danger else pal()['text']};")
+            for w in (ic, t):
+                w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            h.addWidget(ic)
+            h.addWidget(t, 1)
+            lay.addWidget(b)
+
+        if locked:
+            note, nl = card((16, 12, 16, 12))
+            note.setObjectName("banner")
+            nl.addWidget(label(L("locked_hint"), None, True))
+            v.addWidget(note)
+
+        g = group("sec_general")
+        chips(g, L("language"), "language", [("fa", "فارسی"), ("en", "English")], False)
+        chips(g, L("theme"), "theme", [("dark", L("dark")), ("light", L("light"))], False)
+        chips(g, L("default_mode"), "mode", [("vpn", L("vpn")), ("proxy", L("proxy"))])
+        switch(g, L("autostart"), "autostart")
+        switch(g, L("auto_connect"), "auto_connect")
+        switch(g, L("start_min"), "start_minimized")
+        switch(g, L("close_tray"), "close_to_tray")
+        g.addWidget(label(L("admin_note"), "hint", True))
+
+        g = group("sec_core", lock=True)
+        chips(g, L("protocol"), "protocol", core.PROTOCOLS)
+        chips(g, L("transport"), "carrier", [("h3", "HTTP/3 (QUIC)"), ("h2", "HTTP/2 (TCP)")], False)
+        chips(g, L("scan"), "scan", [(x, x) for x in ("turbo", "balanced", "thorough", "verified", "ironclad")], False)
+        chips(g, L("noize"), "noize", [("default", L("default"))] + [(x, x) for x in ("off", "light", "firewall", "balanced", "gfw", "aggressive")], False)
+        chips(g, L("ipv"), "ip_version", [("4", "IPv4"), ("6", "IPv6"), ("dual", "IPv4 + IPv6")], False)
+        switch(g, L("quick"), "quick_reconnect")
+        switch(g, L("fresh"), "fresh_after_drop")
+        number(g, L("tries"), "max_tries", 1, 999)
+        number(g, L("retry_delay"), "retry_delay_ms", 100, 60000)
+        number(g, L("pingfails"), "ping_fails", 1, 20)
+        number(g, L("ping_interval"), "ping_interval", 1, 60)
+        text(g, L("endpoint"), "endpoint", L("endpoint_hint"), True)
+        text(g, L("endpoint2"), "endpoint2", L("endpoint_hint"), True)
+        text(g, L("upstream"), "upstream", L("upstream_hint"))
+
+        g = group("sec_routing", lock=True)
+        text(g, L("route_block"), "route_block", L("route_hint"))
+        text(g, L("route_direct"), "route_direct", L("route_hint"))
+        text(g, L("dns"), "dns", "1.1.1.1, 1.0.0.1")
+
+        g = group("sec_psiphon", lock=True)
+        g.addWidget(field(L("region"), RegionRow(lambda: RegionSheet(self.win, S.psiphon_region, lambda cc: self.put("psiphon_region", cc, True)).exec())))
+        chips(g, L("psiphon_mode"), "psiphon_mode", [("auto", L("auto")), ("cdn", "CDN")], False)
+
+        g = group("sec_tor", lock=True)
+        chips(g, L("bridges"), "tor_bridges", [("auto", L("auto")), ("always", L("always")), ("never", L("never"))], False)
+
+        g = group("sec_advanced", lock=True)
+        chips(g, L("perf"), "perf", [(x, x) for x in ("auto", "low", "medium", "high")], False)
+        text(g, L("extra"), "extra_args", L("extra_hint"))
+        number(g, L("mtu"), "mtu", 1280, 9000)
+        chips(g, L("stack"), "tun_stack", [("gvisor", "gVisor"), ("system", "system"), ("mixed", "mixed")], False)
+        number(g, L("socks"), "socks_port", 1024, 65535)
+        switch(g, L("http_proxy"), "system_proxy")
+        number(g, L("http"), "http_port", 1024, 65535)
+        action(g, "logs", L("open_logs"), self.win.open_logs)
+        action(g, "trash", L("clear_cache"), self.ask_clear, True, not locked)
+        if self._note:
+            g.addWidget(label(self._note, "hint", True))
+        v.addStretch()
+        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(keep))
+
+    def ask_clear(self):
+        ConfirmSheet(self.win, L("clear_cache"), L("clear_cache_warn"), L("confirm"), self.clear_cache).exec()
+
+    def clear_cache(self):
+        for sub in ("aether", "singbox"):
+            shutil.rmtree(os.path.join(core.DATA_DIR, sub), ignore_errors=True)
+        self._note = L("cache_cleared")
+        self.build()
+
+
+class LogsPage(QWidget):
+    def __init__(self, win):
+        super().__init__()
+        self.win, self.ctl = win, win.ctl
+        self.root = QVBoxLayout(self)
+        self.root.setContentsMargins(16, 0, 14, 12)
+        self.view = QPlainTextEdit()
+        self.view.setReadOnly(True)
+        self.view.setMaximumBlockCount(600)
+        self.view.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.header = None
+        self.ctl.log.connect(self.append)
+
+    def append(self, line):
+        self.view.appendPlainText(line)
+
+    def build(self):
+        while self.root.count():
+            it = self.root.takeAt(0)
+            if it.layout():
+                while it.layout().count():
+                    w = it.layout().takeAt(0).widget()
+                    if w and w is not self.view:
+                        w.deleteLater()
+        cp, tr = IconButton("copy", 42, 2.0), IconButton("trash", 42, 2.0)
+        cp.clicked.connect(lambda: QApplication.clipboard().setText(self.view.toPlainText()))
+        tr.clicked.connect(self.clear)
+        self.root.addLayout(page_header(L("logs"), self.win.go_home, [cp, tr]))
+        self.root.addWidget(self.view)
+
+    def show_all(self):
+        self.view.setPlainText("\n".join(self.ctl.logs))
+
+    def clear(self):
+        self.ctl.logs.clear()
+        self.view.clear()
+        self.win.home.update_logs()
+
+
+def read_versions():
+    out = {}
+    try:
+        with open(os.path.join(core.CORE_DIR, "versions.txt"), encoding="utf-8") as f:
+            for ln in f:
+                if "=" in ln:
+                    k, v = ln.strip().split("=", 1)
+                    out[k] = v
+    except OSError:
+        pass
+    return out
+
+
+class AboutPage(QWidget):
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.root = QVBoxLayout(self)
+        self.root.setContentsMargins(16, 0, 8, 10)
+
+    def build(self):
+        while self.root.count():
+            it = self.root.takeAt(0)
+            if it.layout():
+                while it.layout().count():
+                    w = it.layout().takeAt(0).widget()
+                    if w:
+                        w.deleteLater()
+            elif it.widget():
+                it.widget().deleteLater()
+        self.root.addLayout(page_header(L("about"), self.win.open_settings))
+        body = QWidget()
+        v = QVBoxLayout(body)
+        v.setContentsMargins(0, 8, 10, 10)
+        v.setSpacing(14)
+        self.root.addWidget(scrolling(body))
+
+        logo = QLabel()
+        logo.setPixmap(self.win.icon.pixmap(84, 84))
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        name = QLabel("8 VPN")
+        name.setStyleSheet("font-size:26px;")
+        name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(logo)
+        v.addWidget(name)
+
+        ver = read_versions()
+        unknown = L("version_unknown")
+        c, cl = card((18, 16, 18, 16), 14)
+        for title, val in ((L("app_version"), VERSION), (L("core_version"), ver.get("aether", unknown)),
+                           (L("singbox_version"), ver.get("singbox", unknown))):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(title), 1)
+            val_l = QLabel(val)
+            val_l.setObjectName("sub")
+            row.addWidget(val_l)
+            cl.addLayout(row)
+        v.addWidget(c)
+
+        c, cl = card((8, 8, 8, 8), 2)
+        for title, url in ((L("github"), GITHUB), (L("telegram"), TELEGRAM)):
+            b = QPushButton(title)
+            b.setObjectName("action")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
+            cl.addWidget(b)
+        v.addWidget(c)
+
+        c, cl = card((18, 16, 18, 16), 10)
+        cl.addWidget(label(L("license_title"), "gtitle"))
+        cl.addWidget(label(L("license_text"), "sub", True))
+        v.addWidget(c)
+        v.addStretch()
+
+
+# ------------------------------------------------------------------ main window
+class MainWindow(QWidget):
+    def __init__(self, ctl: Controller):
+        super().__init__()
+        self.ctl = ctl
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(430, 720)
+        self.setWindowTitle("8 VPN")
+        self.icon = QIcon(core.resource("assets", "icon.png"))
+        self.setWindowIcon(self.icon)
+        self._drag = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(1, 1, 1, 1)
+        outer.setSpacing(0)
+
+        chrome = QHBoxLayout()
+        chrome.setContentsMargins(0, 6, 8, 0)
+        chrome.addStretch()
+        for kind, fn in (("minus", self.showMinimized), ("close", self.close)):
+            b = IconButton(kind, 30, 2.0)
+            b.clicked.connect(fn)
+            chrome.addWidget(b)
+        outer.addLayout(chrome)
+
+        self.stack = QStackedWidget()
+        outer.addWidget(self.stack)
+        self.home, self.settings, self.logs, self.about = HomePage(self), SettingsPage(self), LogsPage(self), AboutPage(self)
+        for pg in (self.home, self.settings, self.logs, self.about):
+            self.stack.addWidget(pg)
+
+        # tray
+        self.tray = QSystemTrayIcon(self.icon, self)
+        self.tray.activated.connect(lambda r: self.toggle_window() if r == QSystemTrayIcon.ActivationReason.Trigger else None)
+        self.tray_menu = QMenu()
+        self.a_show, self.a_toggle, self.a_quit = QAction(), QAction(), QAction()
+        self.a_show.triggered.connect(self.show_window)
+        self.a_toggle.triggered.connect(self.toggle)
+        self.a_quit.triggered.connect(self.quit_app)
+        for a in (self.a_show, self.a_toggle):
+            self.tray_menu.addAction(a)
+        self.tray_menu.addSeparator()
+        self.tray_menu.addAction(self.a_quit)
+        self.tray.setContextMenu(self.tray_menu)
+        self.tray.show()
+        ctl.status.connect(self.on_status)
+
+        self.refresh()
+
+    # ---- rendering
+    def refresh(self):
+        QApplication.instance().setStyleSheet(qss())
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if rtl() else Qt.LayoutDirection.LeftToRight)
+        self.a_show.setText(L("tray_show"))
+        self.a_quit.setText(L("tray_quit"))
+        self.a_toggle.setText(L("tray_disconnect") if self.ctl.phase != "idle" else L("tray_connect"))
+        self.home.refresh()
+        self.settings.build()
+        self.logs.build()
+        self.about.build()
+        self.update()
+
+    def on_status(self, phase, *_):
+        self.a_toggle.setText(L("tray_disconnect") if phase != "idle" else L("tray_connect"))
+        if phase in ("idle", "connecting"):
+            self.settings.build()  # lock / unlock the option groups
+
+    def paintEvent(self, _):
+        c = pal()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 22, 22)
+        p.fillPath(path, QColor(c["bg"]))
+        p.setPen(QPen(QColor(c["border"]), 1))
+        p.drawPath(path)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and e.position().y() < 62:
+            self._drag = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, e):
+        if self._drag is not None and e.buttons() & Qt.MouseButton.LeftButton:
+            self.move(e.globalPosition().toPoint() - self._drag)
+
+    def mouseReleaseEvent(self, _):
+        self._drag = None
+
+    # ---- navigation
+    def go_home(self): self.stack.setCurrentWidget(self.home)
+    def open_settings(self): self.stack.setCurrentWidget(self.settings)
+    def open_about(self): self.stack.setCurrentWidget(self.about)
+
+    def open_logs(self):
+        self.logs.show_all()
+        self.stack.setCurrentWidget(self.logs)
+
+    # ---- actions
+    def toggle(self):
+        h = self.home
+        if self.ctl.phase == "idle":
+            h._err = ""
+            if S.mode == "vpn" and not core.is_admin():
+                h._err = L("need_admin_ask")
+                h.update_status_line()
+                if core.relaunch_as_admin(["--connect"]):
+                    QTimer.singleShot(300, self.quit_app)
+                else:
+                    h._err = L("admin_denied")
+                    h.update_status_line()
+                return
+            self.ctl.start()
+        elif self.ctl.phase != "stopping":
+            self.ctl.stop()
 
     def show_window(self):
         self.showNormal()
@@ -960,40 +959,8 @@ class MainWindow(QWidget):
         else:
             self.quit_app()
 
-    # ---- controller callbacks
-    def on_status(self, phase, attempt, tries):
-        if attempt:
-            self._attempt, self._tries = attempt, tries
-        self._since = (self._since or time.time()) if phase == "connected" else None
-        if phase == "connected":
-            self._reason = ""
-        if phase == "idle":
-            self._ping, self._rx, self._tx, self._speed, self._exit = -1, 0.0, 0.0, -1.0, ""
-            self._test_res = ""
-            self.test_lbl.setText("")
-        self.update_all()
 
-    def on_ping(self, ms): self._set(ping=ms)
-    def on_traffic(self, rx, tx): self._set(rx=rx, tx=tx)
-    def on_exit(self, text): self._set(exit=text)
-    def on_speed(self, bps): self._set(speed=bps)
-    def on_log(self, _line): self.update_logcard()
-
-    def on_message(self, key):
-        if not key or key == "stopped":
-            self._err = ""
-        elif key in ("ping_failed", "core_exited", "tun_exited", "rescan"):
-            self._reason = L("rescan_msg" if key == "rescan" else key)
-            self._err = ""
-        else:
-            self._err = L(key)
-        self.update_status_line()
-
-
-ROUTE_LABEL = {k: r.label for k, r in core.ROUTES.items()}
-
-
-# ---------------------------------------------------------------- entry
+# ------------------------------------------------------------------ entry
 def single_instance(wait_s=0.0):
     """Named mutex so only one copy runs. Returns False if another copy is alive."""
     if not core.IS_WIN:
@@ -1015,7 +982,7 @@ def main():
     argv = sys.argv[1:]
     if not single_instance(6.0 if "--connect" in argv else 0.0):
         return 0
-    if core.IS_WIN:  # own taskbar identity + icon
+    if core.IS_WIN:
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Mrmmd2004.8VPN")
         except Exception:

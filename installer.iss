@@ -17,8 +17,8 @@ SetupIconFile=assets\icon.ico
 UninstallDisplayIcon={app}\8VPN.exe
 Compression=lzma2
 SolidCompression=yes
-ArchitecturesInstallIn64BitMode=x64compatible
-ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64
 WizardStyle=modern
 PrivilegesRequired=admin
 
