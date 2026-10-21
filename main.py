@@ -996,6 +996,11 @@ def single_instance(wait_s=0.0):
 
 def main():
     argv = sys.argv[1:]
+    # The release builds ask for admin rights through their manifest before anything starts.
+    # This covers running from source: ask for them first and open only in the elevated copy.
+    if core.IS_WIN and not core.is_admin() and "--no-elevate" not in argv:
+        if core.relaunch_as_admin(argv):
+            return 0
     if not single_instance(6.0 if "--connect" in argv else 0.0):
         return 0
     if core.IS_WIN:
@@ -1013,7 +1018,7 @@ def main():
     if "--minimized" not in argv and not S.start_minimized:
         w.show()
     if "--connect" in argv or S.auto_connect:
-        QTimer.singleShot(700, w.toggle)
+        QTimer.singleShot(150, w.toggle)
     code = app.exec()
     # Make sure nothing is left running: stop the cores, restore the proxy, then end the process.
     try:

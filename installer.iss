@@ -39,6 +39,7 @@ Name: "{autodesktop}\8 VPN"; Filename: "{app}\8VPN.exe"; Tasks: desktopicon
 Filename: "{app}\8VPN.exe"; Description: "Launch 8 VPN"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+Filename: "schtasks"; Parameters: "/Delete /TN 8VPN /F"; Flags: runhidden; RunOnceId: "DelTask"
 Filename: "taskkill"; Parameters: "/F /IM aether.exe"; Flags: runhidden; RunOnceId: "KillAether"
 Filename: "taskkill"; Parameters: "/F /IM sing-box.exe"; Flags: runhidden; RunOnceId: "KillSingbox"
 Filename: "taskkill"; Parameters: "/F /IM 8VPN.exe"; Flags: runhidden; RunOnceId: "KillApp"

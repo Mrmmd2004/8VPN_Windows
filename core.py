@@ -361,19 +361,51 @@ def restore_system_proxy():
 
 
 def set_autostart(on: bool):
+    """Start with Windows. The app needs admin rights, and Windows silently skips elevated
+    programs listed in the Run key, so a Scheduled Task with the highest privileges is used."""
     if not IS_WIN:
         return
+    import tempfile
     import winreg
-    cmd = '"%s" --minimized' % sys.executable if getattr(sys, "frozen", False) else \
-        '"%s" "%s" --minimized' % (sys.executable, os.path.abspath(sys.argv[0]))
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE) as k:
-        if on:
-            winreg.SetValueEx(k, APP_NAME, 0, winreg.REG_SZ, cmd)
-        else:
-            try:
-                winreg.DeleteValue(k, APP_NAME)
-            except OSError:
-                pass
+    try:  # remove the old Run-key entry written by earlier versions
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0,
+                            winreg.KEY_SET_VALUE) as k:
+            winreg.DeleteValue(k, APP_NAME)
+    except OSError:
+        pass
+    run = lambda *a: subprocess.run(["schtasks", *a], capture_output=True, creationflags=NO_WINDOW, timeout=30)
+    if not on:
+        run("/Delete", "/TN", APP_NAME, "/F")
+        return
+    if getattr(sys, "frozen", False):
+        exe, args = sys.executable, "--minimized"
+    else:
+        exe, args = sys.executable, '"%s" --minimized' % os.path.abspath(sys.argv[0])
+    esc = lambda t: t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    user = esc(os.environ.get("USERDOMAIN", "") + "\\" + os.environ.get("USERNAME", ""))
+    xml = f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId><Delay>PT5S</Delay></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <StartWhenAvailable>true</StartWhenAvailable>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>{esc(exe)}</Command><Arguments>{esc(args)}</Arguments></Exec></Actions>
+</Task>"""
+    p = os.path.join(tempfile.gettempdir(), "8vpn_task.xml")
+    with open(p, "w", encoding="utf-16") as f:
+        f.write(xml)
+    try:
+        run("/Create", "/TN", APP_NAME, "/XML", p, "/F")
+    finally:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
 
 
 # -------------------------------------------------------- SOCKS probe
