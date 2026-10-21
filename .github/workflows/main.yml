@@ -52,7 +52,7 @@ jobs:
       - name: Build folder version
         shell: bash
         run: |
-          pyinstaller --noconfirm --windowed --name 8VPN \
+          pyinstaller --noconfirm --windowed --uac-admin --name 8VPN \
             --icon assets/icon.ico --add-data "assets;assets" \
             --exclude-module tkinter --exclude-module PyQt6.QtNetwork \
             --exclude-module PyQt6.QtSvg --exclude-module PyQt6.QtQml \
@@ -64,7 +64,7 @@ jobs:
       - name: Build portable single-file exe
         shell: bash
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name 8VPN-Portable \
+          pyinstaller --noconfirm --onefile --windowed --uac-admin --name 8VPN-Portable \
             --icon assets/icon.ico --add-data "assets;assets" --add-data "core;core" \
             --exclude-module tkinter --exclude-module PyQt6.QtNetwork \
             --exclude-module PyQt6.QtSvg --exclude-module PyQt6.QtQml \
