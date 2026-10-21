@@ -16,7 +16,7 @@ env:
   AETHER_REF: ${{ inputs.aether_ref || 'v2.3.0' }}
   SINGBOX_VERSION: ${{ inputs.singbox_version || '1.13.21' }}
   WINTUN_VERSION: "0.14.1"
-  APP_VERSION: "1.0.0"
+  APP_VERSION: "2.8"
 
 jobs:
   build:
