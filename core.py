@@ -20,7 +20,7 @@ from collections import deque
 from PyQt6.QtCore import QObject, pyqtSignal
 
 APP_NAME = "8VPN"
-VERSION = "1.0.0"
+VERSION = "2.8"
 TELEGRAM = "https://t.me/Clubapp8"
 
 NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW
