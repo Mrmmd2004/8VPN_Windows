@@ -42,10 +42,7 @@ def region_name(cc):
 
 
 def active_label():
-    r = core.route_of(S)
-    proto = dict(core.PROTOCOLS)[S.protocol]
-    return {"aether": proto, "aether_psiphon": f"{proto} → Psiphon", "aether_tor": f"{proto} → Tor",
-            "psiphon_reverse": "Psiphon → MASQUE (HTTP/2)", "tor_reverse": "Tor → MASQUE (HTTP/2)"}.get(r.name, r.label)
+    return core.active_label(S)
 
 
 # ------------------------------------------------------------------ small builders
@@ -398,7 +395,7 @@ class HomePage(QWidget):
         self.summary.kind = "lock" if not idle else ("up" if self._panel_open else "down")
         self.summary.setEnabled(idle)
         self.summary.update()
-        self.drop.setText(L("last_drop", r=self._reason) if self._reason and idle else "")
+        self.drop.setText(L("last_drop", r=self._reason) if self._reason else "")
         self.update_stats()
         self.update_status_line()
         self.update_logs()
@@ -525,19 +522,21 @@ class HomePage(QWidget):
         if attempt:
             self._attempt, self._tries = attempt, tries
         self._since = (self._since or time.time()) if phase == "connected" else None
-        if phase == "connected":
-            self._reason = ""
         if phase == "idle":
             self._ping, self._rx, self._tx, self._speed, self._exit = -1, 0.0, 0.0, -1.0, ""
             self.test_lbl.setText("")
         self.refresh()
 
     def on_message(self, key):
+        key, _, arg = (key or "").partition("|")
         if not key or key == "stopped":
             self._err = ""
-        elif key in ("ping_failed", "core_exited", "tun_exited", "rescan"):
-            self._reason = L("rescan_msg" if key == "rescan" else key)
+        elif key.startswith("r_"):
+            # why the link last dropped / could not connect (shown as "Last drop: ...")
+            self._reason = L(key, n=arg) if arg else L(key)
             self._err = ""
+            self.update_all()
+            return
         else:
             self._err = L(key)
         self.update_status_line()
@@ -669,6 +668,11 @@ class SettingsPage(QWidget):
         switch(g, L("auto_connect"), "auto_connect")
         switch(g, L("start_min"), "start_minimized")
         switch(g, L("close_tray"), "hide_on_close")
+        chips(g, L("split_tunnel"), "split_mode",
+              [("off", L("split_off")), ("include", L("split_include")), ("exclude", L("split_exclude"))])
+        if S.split_mode != "off":
+            text(g, L("split_apps"), "split_apps", L("split_hint"))
+            g.addWidget(label(L("split_note"), "hint", True))
         g.addWidget(label(L("admin_note"), "hint", True))
 
         g = group("sec_core", lock=True)
@@ -778,11 +782,37 @@ def read_versions():
 
 
 class AboutPage(QWidget):
+    checked = pyqtSignal(object)  # ("ok", (tag, newer, url)) or ("fail", None)
+
     def __init__(self, win):
         super().__init__()
         self.win = win
         self.root = QVBoxLayout(self)
         self.root.setContentsMargins(16, 0, 8, 10)
+        self._upd = ("idle", None)   # idle | checking | latest | failed | available
+        self.checked.connect(self.on_checked)
+
+    def check_update(self):
+        state, data = self._upd
+        if state == "checking":
+            return
+        if state == "available":
+            QDesktopServices.openUrl(QUrl(data[2]))
+            return
+        self._upd = ("checking", None)
+        self.build()
+
+        def work():
+            try:
+                self.checked.emit(("ok", core.check_update()))
+            except Exception:
+                self.checked.emit(("fail", None))
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_checked(self, res):
+        kind, data = res
+        self._upd = ("failed", None) if kind == "fail" else (("available", data) if data[1] else ("latest", data))
+        self.build()
 
     def build(self):
         while self.root.count():
@@ -821,6 +851,21 @@ class AboutPage(QWidget):
             val_l.setObjectName("sub")
             row.addWidget(val_l)
             cl.addLayout(row)
+        v.addWidget(c)
+
+        # update check (same idea as the Android app)
+        c, cl = card((8, 8, 8, 8), 6)
+        state, data = self._upd
+        b = Btn(L("update_available", v=data[0]) if state == "available" else L("update_check"), "action")
+        b.setEnabled(state != "checking")
+        b.clicked.connect(self.check_update)
+        cl.addWidget(b)
+        note = {"idle": "update_tap", "checking": "update_checking", "latest": "update_latest",
+                "failed": "update_failed"}.get(state)
+        if note:
+            hint = label(L(note), "hint", True)
+            hint.setContentsMargins(12, 0, 12, 6)
+            cl.addWidget(hint)
         v.addWidget(c)
 
         c, cl = card((8, 8, 8, 8), 2)
@@ -940,6 +985,7 @@ class MainWindow(QWidget):
         h = self.home
         if self.ctl.phase == "idle":
             h._err = ""
+            h._reason = ""
             if S.mode == "vpn" and not core.is_admin():
                 h._err = L("need_admin_ask")
                 h.update_status_line()

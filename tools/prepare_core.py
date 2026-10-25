@@ -12,7 +12,7 @@ import sys
 import urllib.request
 import zipfile
 
-AETHER_REF = os.environ.get("AETHER_REF", "v2.3.0")
+AETHER_REF = os.environ.get("AETHER_REF", "v2.4.0")
 SINGBOX_VERSION = os.environ.get("SINGBOX_VERSION", "1.13.21")
 WINTUN_VERSION = os.environ.get("WINTUN_VERSION", "0.14.1")
 
