@@ -5,7 +5,7 @@ on:
     inputs:
       aether_ref:
         description: "Aether release tag"
-        default: "v2.3.0"
+        default: "v2.4.0"
       singbox_version:
         description: "sing-box version (without v)"
         default: "1.13.21"
@@ -13,10 +13,10 @@ on:
     tags: ["v*"]
 
 env:
-  AETHER_REF: ${{ inputs.aether_ref || 'v2.3.0' }}
+  AETHER_REF: ${{ inputs.aether_ref || 'v2.4.0' }}
   SINGBOX_VERSION: ${{ inputs.singbox_version || '1.13.21' }}
   WINTUN_VERSION: "0.14.1"
-  APP_VERSION: "2.8"
+  APP_VERSION: "3.8"
 
 jobs:
   build:
