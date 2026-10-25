@@ -2,6 +2,7 @@
 indigo/teal palette, round bordered icon buttons, tonal pills, filled segmented switch,
 gradient logo and a glowing connect button."""
 import math
+import time
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, QSizeF, Qt, QTimer
 from PyQt6.QtGui import (QBrush, QColor, QFont, QFontMetrics, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap,
@@ -751,6 +752,10 @@ class Segmented(Card):
         self.btns = {}
 
     def set_items(self, items, current, enabled=True):
+        sig = (tuple(items), current, enabled)
+        if sig == getattr(self, "_sig", None):
+            return
+        self._sig = sig
         while self._h.count():
             it = self._h.takeAt(0)
             if it.widget():
@@ -777,12 +782,22 @@ class ConnectButton(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._click, self.phase, self._t = on_click, "idle", 0.0
         self._glow = self._live = self._busy = 0.0
+        self._last = time.monotonic()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(33)
+
+    def _wake(self):
+        if not self._timer.isActive():
+            self._last = time.monotonic()
+            self._timer.start(40)  # ~25 fps is plenty for a soft glow
+
+    def showEvent(self, e):
+        self._wake()
+        super().showEvent(e)
 
     def set_phase(self, phase):
         self.phase = phase
+        self._wake()
         self.update()
 
     @staticmethod
@@ -794,9 +809,10 @@ class ConnectButton(QWidget):
         return self.phase in ("connecting", "reconnecting", "stopping")
 
     def _tick(self):
-        if not self.isVisible():
-            return
-        dt = 0.033
+        now = time.monotonic()
+        dt, self._last = min(0.1, now - self._last), now
+        if not self.isVisible() or self.window().isMinimized():
+            return  # nothing is drawn while hidden / minimised
         self._t += dt
         live, busy = self.phase == "connected", self._is_busy()
         g = self._toward(self._glow, 1.0 if live else 0.75 if busy else 0.0, dt, 0.5)
@@ -806,6 +822,8 @@ class ConnectButton(QWidget):
         self._glow, self._live, self._busy = g, l, b
         if changed or live or busy:
             self.update()
+        else:
+            self._timer.stop()  # idle and settled: no more wake-ups until the phase changes
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:

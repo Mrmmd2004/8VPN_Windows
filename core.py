@@ -1025,7 +1025,7 @@ class Controller(QObject):
                     and (not r.psiphon or self._psiphon_ready or waited > 60) \
                     and (r.name != "aether" or self._socks_ready or waited > 90):
                 break
-            self._sleep(0.5)
+            self._sleep(0.12)
         else:
             return False
         self._log("core is ready")
@@ -1059,7 +1059,7 @@ class Controller(QObject):
                 return False
             if self._sb_started:
                 return True
-            self._sleep(0.3)
+            self._sleep(0.1)
         # no "started" line seen but still alive: accept, the monitor will notice real trouble
         return self._singbox is not None and self._singbox.poll() is None
 

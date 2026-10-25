@@ -399,6 +399,9 @@ class HomePage(QWidget):
         self.clock = QTimer(self)
         self.clock.timeout.connect(self.update_status_line)
         self.clock.start(1000)
+        self._log_timer = QTimer(self)
+        self._log_timer.setSingleShot(True)
+        self._log_timer.timeout.connect(self.update_logs)
 
     # ---- helpers
     @property
@@ -413,6 +416,7 @@ class HomePage(QWidget):
 
     # ---- full render
     def refresh(self):
+        self._built_idle = self.idle
         self.b_logs.setToolTip(L("logs"))
         self.b_set.setToolTip(L("settings"))
         self.b_test.setText(L("ping_testing") if self._testing else L("ping_test"))
@@ -434,7 +438,9 @@ class HomePage(QWidget):
         self.pill.tint = qc
         self.pill.update()
         self.dot.set_color(qc)
-        self.status.setStyleSheet(f"color:{color};font-size:15px;font-weight:600;")
+        if getattr(self, "_st_col", None) != color:
+            self._st_col = color
+            self.status.setStyleSheet(f"color:{color};font-size:15px;font-weight:600;")
         self.status.setText(L(ph))
         self.btn.set_phase(ph)
         self.proxy_card.setVisible(S.mode == "proxy")
@@ -507,7 +513,9 @@ class HomePage(QWidget):
         else:
             txt, col = "", c["sub"]
         self.sub.setText(txt)
-        self.sub.setStyleSheet(f"color:{col};")
+        if getattr(self, "_sub_col", None) != col:
+            self._sub_col = col
+            self.sub.setStyleSheet(f"color:{col};")
 
     def update_logs(self):
         lines = list(self.ctl.logs)[-2:]
@@ -542,7 +550,8 @@ class HomePage(QWidget):
     def put(self, **kw):
         if self.idle:
             S.set(**kw)
-            self.win.refresh()
+            self.refresh()
+            self.win.mark_dirty("settings")
 
     def set_mode(self, mode):
         self.put(mode=mode)
@@ -589,7 +598,10 @@ class HomePage(QWidget):
         if phase == "idle":
             self._ping, self._rx, self._tx, self._speed, self._exit = -1, 0.0, 0.0, -1.0, ""
             self.test_lbl.setText("")
-        self.refresh()
+        if self.idle != getattr(self, "_built_idle", None):
+            self.refresh()   # lock / unlock the option cards
+        else:
+            self.update_all()
 
     def on_message(self, key):
         key, _, arg = (key or "").partition("|")
@@ -609,7 +621,9 @@ class HomePage(QWidget):
     def on_traffic(self, rx, tx): self.set_state(rx=rx, tx=tx)
     def on_exit(self, text): self.set_state(exit=text)
     def on_speed(self, bps): self.set_state(speed=bps)
-    def on_log(self, _line): self.update_logs()
+    def on_log(self, _line):
+        if not self._log_timer.isActive():
+            self._log_timer.start(150)
 
 
 class SettingsPage(QWidget):
@@ -999,6 +1013,8 @@ class MainWindow(QWidget):
         self.icon = QIcon(core.resource("assets", "icon.png"))
         self.setWindowIcon(self.icon)
         self._drag = None
+        self._qss = None
+        self._dirty = set()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(1, 1, 1, 1)
@@ -1038,22 +1054,36 @@ class MainWindow(QWidget):
         self.refresh()
 
     # ---- rendering
+    def mark_dirty(self, *names):
+        """Pages other than the visible one are rebuilt only when they are opened."""
+        self._dirty.update(names)
+        cur = self.stack.currentWidget()
+        for n in names:
+            if getattr(self, n) is cur:
+                self._build(n)
+
+    def _build(self, name):
+        if name in self._dirty:
+            self._dirty.discard(name)
+            getattr(self, name).build()
+
     def refresh(self):
-        QApplication.instance().setStyleSheet(qss())
+        sheet = qss()
+        if sheet != self._qss:  # re-parsing the app stylesheet re-polishes every widget: do it only on a real change
+            self._qss = sheet
+            QApplication.instance().setStyleSheet(sheet)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if rtl() else Qt.LayoutDirection.LeftToRight)
         self.a_show.setText(L("tray_show"))
         self.a_quit.setText(L("tray_quit"))
         self.a_toggle.setText(L("tray_disconnect") if self.ctl.phase != "idle" else L("tray_connect"))
         self.home.refresh()
-        self.settings.build()
-        self.logs.build()
-        self.about.build()
+        self.mark_dirty("settings", "logs", "about")
         self.update()
 
     def on_status(self, phase, *_):
         self.a_toggle.setText(L("tray_disconnect") if phase != "idle" else L("tray_connect"))
         if phase in ("idle", "connecting"):
-            self.settings.build()  # lock / unlock the option groups
+            self.mark_dirty("settings")  # lock / unlock the option groups (built when opened)
 
     def paintEvent(self, _):
         c = pal()
@@ -1078,10 +1108,16 @@ class MainWindow(QWidget):
 
     # ---- navigation
     def go_home(self): self.stack.setCurrentWidget(self.home)
-    def open_settings(self): self.stack.setCurrentWidget(self.settings)
-    def open_about(self): self.stack.setCurrentWidget(self.about)
+    def open_settings(self):
+        self._build("settings")
+        self.stack.setCurrentWidget(self.settings)
+
+    def open_about(self):
+        self._build("about")
+        self.stack.setCurrentWidget(self.about)
 
     def open_logs(self):
+        self._build("logs")
         self.logs.show_all()
         self.stack.setCurrentWidget(self.logs)
 
