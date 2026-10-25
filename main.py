@@ -1,4 +1,5 @@
 import ctypes
+import html
 import os
 import re
 import shutil
@@ -8,14 +9,13 @@ import time
 
 from PyQt6.QtCore import QPoint, QRectF, QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPen
-from PyQt6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                             QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
-                             QSystemTrayIcon, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QScrollArea,
+                             QSpinBox, QStackedWidget, QSystemTrayIcon, QTextEdit, QVBoxLayout, QWidget)
 
 import core
 from core import S, TELEGRAM, VERSION, Controller
-from ui_kit import (L, Btn, Card, Chips, ConnectButton, Icon, IconButton, Segmented, Sheet, Switch, flag_pixmap, fmt_rate,
-                    paint_icon, pal, qss, rtl)
+from ui_kit import (L, Btn, Card, Chips, ClickCard, ConnectButton, Dot, Icon, IconButton, LogoMark, SectionTitle,
+                    Segmented, Sheet, SwitchRow, Tile, flag_pixmap, fmt_rate, paint_icon, pal, qss, rtl)
 
 GITHUB = "https://github.com/Mrmmd2004/8VPN_Windows"
 GITHUB_ANDROID = "https://github.com/Mrmmd2004/8vpn"
@@ -66,28 +66,33 @@ def field(title, widget):
     box = QWidget()
     v = QVBoxLayout(box)
     v.setContentsMargins(0, 0, 0, 0)
-    v.setSpacing(7)
+    v.setSpacing(8)
     v.addWidget(label(title, "sub"))
     v.addWidget(widget)
     return box
 
 
-def inline_row(title, widget):
-    box = QWidget()
-    h = QHBoxLayout(box)
-    h.setContentsMargins(0, 0, 0, 0)
-    h.addWidget(QLabel(title), 1)
-    h.addWidget(widget)
-    return box
+def banner(text):
+    """Soft tinted note with an info icon (Android Banner)."""
+    f = Card("banner")
+    h = QHBoxLayout(f)
+    h.setContentsMargins(14, 12, 14, 12)
+    h.setSpacing(10)
+    h.addWidget(Icon("info", 20, "primary"))
+    h.addWidget(label(text, None, True), 1)
+    return f
 
 
 def page_header(title, back, actions=()):
+    """Round back button, bold title, optional round action buttons (Android Page)."""
     h = QHBoxLayout()
-    b = IconButton("back", 42, 2.4)
+    h.setContentsMargins(0, 8, 0, 12)
+    h.setSpacing(8)
+    b = IconButton("back", 42, 2.0)
     b.clicked.connect(back)
     h.addWidget(b)
-    t = label(title, "page")
-    h.addWidget(t, 1)
+    h.addSpacing(4)
+    h.addWidget(label(title, "page"), 1)
     for a in actions:
         h.addWidget(a)
     return h
@@ -101,19 +106,63 @@ def scrolling(widget_layout_owner):
     return sc
 
 
+def clear_layout(layout, keep=()):
+    """Remove everything from a layout (nested layouts too) and delete the widgets, except those in keep."""
+    while layout.count():
+        it = layout.takeAt(0)
+        sub = it.layout()
+        if sub is not None:
+            clear_layout(sub, keep)
+        w = it.widget()
+        if w is not None and w not in keep:
+            w.deleteLater()
+
+
+def dialog_button(text, on_click):
+    b = QPushButton(text)
+    b.setObjectName("link")
+    b.setCursor(Qt.CursorShape.PointingHandCursor)
+    b.clicked.connect(on_click)
+    return b
+
+
 class ConfirmSheet(Sheet):
     def __init__(self, parent, title, text, ok_text, on_ok):
         super().__init__(parent, title)
         self.v.addWidget(label(text, "sub", True))
         h = QHBoxLayout()
         h.addStretch()
-        for txt, name, fn in ((L("cancel"), "link", self.reject), (ok_text, "linkDanger", lambda: (on_ok(), self.accept()))):
-            b = QPushButton(txt)
-            b.setObjectName(name)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(fn)
-            h.addWidget(b)
+        h.addWidget(dialog_button(L("cancel"), self.reject))
+        h.addWidget(dialog_button(ok_text, lambda: (on_ok(), self.accept())))
         self.v.addLayout(h)
+
+
+class PickRow(Btn):
+    """One row of a picker dialog: flag, name and a check mark on the current choice."""
+
+    def __init__(self, text, cc, on, on_click):
+        super().__init__("", "pick", on)
+        self.hay = ""
+        self.setStyleSheet("QPushButton#pick { padding: 0; }")
+        self.setMinimumHeight(44)
+        self.clicked.connect(on_click)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(12, 6, 12, 6)
+        h.setSpacing(12)
+        flag = QLabel()
+        flag.setPixmap(flag_pixmap(cc, 30))
+        name = QLabel(text)
+        if on:
+            name.setStyleSheet(f"color:{pal()['primary']};")
+        parts = [flag, name]
+        h.addWidget(flag)
+        h.addWidget(name, 1)
+        if on:
+            ck = Icon("check", 18, "primary", 2.6)
+            parts.append(ck)
+            h.addWidget(ck)
+        for w in parts:
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
 
 class RegionSheet(Sheet):
@@ -123,84 +172,80 @@ class RegionSheet(Sheet):
         self.search = QLineEdit()
         self.search.setPlaceholderText(L("search"))
         self.v.addWidget(self.search)
-        self.list = QListWidget()
-        self.list.setIconSize(QSize(40, 27))
-        self.list.setFixedHeight(340)
-        rows = [("", L("region_auto"), "")] + [(cc, region_name(cc), " ".join(REGIONS[cc]).lower() + cc.lower()) for cc in REGIONS]
-        for cc, text, hay in rows:
-            it = QListWidgetItem(text)
-            it.setIcon(QIcon(flag_pixmap(cc, 40)))
-            it.setData(Qt.ItemDataRole.UserRole, cc)
-            it.setData(Qt.ItemDataRole.UserRole + 1, hay or "auto")
-            it.setSizeHint(QSize(0, 42))
-            self.list.addItem(it)
-            if cc == current.upper():
-                self.list.setCurrentItem(it)
-        self.list.itemClicked.connect(self.picked)
+        body = QWidget()
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(0, 0, 6, 0)
+        bl.setSpacing(2)
+        self.rows = []
+        cur = current.upper()
+        entries = [("", L("region_auto"), "auto")] + [(cc, region_name(cc), " ".join(REGIONS[cc]).lower() + cc.lower()) for cc in REGIONS]
+        for cc, text, hay in entries:
+            row = PickRow(text, cc, cc == cur, lambda _=False, c=cc: self.picked(c))
+            row.hay = hay
+            bl.addWidget(row)
+            self.rows.append(row)
+        bl.addStretch()
+        sc = scrolling(body)
+        sc.setFixedHeight(320)
+        self.v.addWidget(sc)
         self.search.textChanged.connect(self.filter)
-        self.v.addWidget(self.list)
         h = QHBoxLayout()
         h.addStretch()
-        b = QPushButton(L("cancel"))
-        b.setObjectName("link")
-        b.setCursor(Qt.CursorShape.PointingHandCursor)
-        b.clicked.connect(self.reject)
-        h.addWidget(b)
+        h.addWidget(dialog_button(L("cancel"), self.reject))
         self.v.addLayout(h)
 
     def filter(self, q):
         q = q.strip().lower()
-        for i in range(self.list.count()):
-            it = self.list.item(i)
-            it.setHidden(bool(q) and q not in it.data(Qt.ItemDataRole.UserRole + 1))
+        for row in self.rows:
+            row.setVisible(not q or q in row.hay)
 
-    def picked(self, it):
-        self._pick(it.data(Qt.ItemDataRole.UserRole))
+    def picked(self, cc):
+        self._pick(cc)
         self.accept()
 
 
-class RegionRow(QPushButton):
-    """Flag + country name + chevron, used on Home and in Settings."""
+class RegionRow(Btn):
+    """Flag + country name + chevron, used on Home and in Settings (Android RegionButton)."""
 
     def __init__(self, on_click, enabled=True):
-        super().__init__("")
-        self.setObjectName("row")
+        super().__init__("", "row")
         self.setStyleSheet("QPushButton#row { padding: 0; }")
-        self.setMinimumHeight(52)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(48)
         self.setEnabled(enabled)
         self.clicked.connect(on_click)
         h = QHBoxLayout(self)
-        h.setContentsMargins(16, 8, 16, 8)
+        h.setContentsMargins(14, 8, 14, 8)
         h.setSpacing(12)
         cc = S.psiphon_region
         flag = QLabel()
-        flag.setPixmap(flag_pixmap(cc, 34))
+        flag.setPixmap(flag_pixmap(cc, 30))
         text = QLabel(region_name(cc) if cc else L("region_auto"))
-        for w in (flag, text):
+        chev = Icon("chev_left" if rtl() else "chev_right", 20)
+        for w in (flag, text, chev):
             w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        chev = Icon("down", 20)
-        chev.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         h.addWidget(flag)
         h.addWidget(text, 1)
         h.addWidget(chev)
 
 
-class SummaryRow(QPushButton):
+class SummaryRow(Btn):
+    """'VPN · route' line that opens the options; shows a lock while connected."""
+
     def __init__(self, on_click):
-        super().__init__("")
-        self.setObjectName("row")
-        self.setStyleSheet("QPushButton#row { padding: 14px 46px 14px 16px; }" if not rtl() else
-                           "QPushButton#row { padding: 14px 16px 14px 46px; text-align: right; }")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        super().__init__("", "row")
         self.clicked.connect(on_click)
-        self.kind = "down"
+        self.kind = "chevron"
+        self.restyle()
+
+    def restyle(self):
+        self.setStyleSheet("QPushButton#row { padding: 13px 16px 13px 46px; text-align: right; }" if rtl() else
+                           "QPushButton#row { padding: 13px 46px 13px 16px; text-align: left; }")
 
     def paintEvent(self, e):
         super().paintEvent(e)
         p = QPainter(self)
-        x = 12 if rtl() else self.width() - 40
-        paint_icon(p, self.kind, QRectF(x, (self.height() - 24) / 2, 28, 24), QColor(pal()["sub"]), 2.2)
+        x = 14 if rtl() else self.width() - 34
+        paint_icon(p, self.kind, QRectF(x, (self.height() - 20) / 2, 20, 20), QColor(pal()["sub"]), 2.0)
 
 
 # ------------------------------------------------------------------ pages
@@ -216,23 +261,22 @@ class HomePage(QWidget):
         self._since, self._panel_open, self._testing = None, False, False
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 0, 8, 10)
+        root.setContentsMargins(16, 0, 4, 10)
         root.setSpacing(4)
 
         top = QHBoxLayout()
-        self.logo = QLabel()
-        self.logo.setPixmap(win.icon.pixmap(36, 36))
+        top.setContentsMargins(0, 8, 12, 0)
+        top.setSpacing(8)
+        self.logo = LogoMark(36)
         title = QLabel("8 VPN")
-        title.setStyleSheet("font-size:25px;")
+        title.setObjectName("title")
         top.addWidget(self.logo)
-        top.addSpacing(6)
+        top.addSpacing(2)
         top.addWidget(title)
         top.addStretch()
-        self.b_logs = QPushButton()
-        self.b_logs.setObjectName("link")
-        self.b_logs.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.b_logs = IconButton("logs", 42, 2.0)
         self.b_logs.clicked.connect(win.open_logs)
-        self.b_set = IconButton("gear", 42, 2.0)
+        self.b_set = IconButton("settings", 42, 2.0)
         self.b_set.clicked.connect(win.open_settings)
         top.addWidget(self.b_logs)
         top.addWidget(self.b_set)
@@ -246,16 +290,17 @@ class HomePage(QWidget):
         root.addWidget(sc)
         v = QVBoxLayout(inner)
         v.setContentsMargins(0, 4, 12, 8)
-        v.setSpacing(12)
+        v.setSpacing(10)
 
+        # hero: connect button + status
         self.btn = ConnectButton(win.toggle)
         v.addWidget(self.btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.pill = Card("pill")
         pl = QHBoxLayout(self.pill)
-        pl.setContentsMargins(16, 6, 16, 6)
-        pl.setSpacing(9)
-        self.dot, self.status = QLabel("●"), QLabel()
+        pl.setContentsMargins(14, 6, 14, 6)
+        pl.setSpacing(8)
+        self.dot, self.status = Dot(8), QLabel()
         self.flag = QLabel()
         self.flag.hide()
         pl.addWidget(self.dot)
@@ -268,40 +313,46 @@ class HomePage(QWidget):
         self.drop.setAlignment(Qt.AlignmentFlag.AlignCenter)
         v.addWidget(self.sub)
         v.addWidget(self.drop)
+        v.addSpacing(6)
 
-        # stats
-        self.stats, sl = card((8, 16, 8, 16), 0)
+        # stats: icon, value, label (same order as the Android card)
+        self.stats, sl = card((6, 16, 6, 16), 0)
         row = QHBoxLayout()
+        row.setSpacing(0)
         sl.addLayout(row)
         self.st = {}
-        for key in ("ping", "download", "upload", "link_speed"):
+        for key, ico in (("ping", "bolt"), ("download", "down"), ("upload", "up"), ("link_speed", "globe")):
             col = QVBoxLayout()
-            col.setSpacing(5)
+            col.setSpacing(0)
             lab, val = QLabel(), QLabel("—")
             for w in (lab, val):
                 w.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lab.setObjectName("sub")
+            lab.setObjectName("hint")
             val.setStyleSheet("font-size:14px;font-weight:600;")
-            col.addWidget(lab)
+            col.addWidget(Icon(ico, 18, "teal"), 0, Qt.AlignmentFlag.AlignHCenter)
+            col.addSpacing(8)
             col.addWidget(val)
+            col.addSpacing(2)
+            col.addWidget(lab)
             row.addLayout(col, 1)
             self.st[key] = (lab, val)
         v.addWidget(self.stats)
 
-        self.proxy_card, pc = card((16, 12, 16, 12))
+        self.proxy_card, pc = card((14, 12, 14, 12))
         self.proxy_lbl = QLabel()
         self.proxy_lbl.setStyleSheet("font-family:Consolas,monospace;font-size:12px;")
         pc.addWidget(self.proxy_lbl)
         v.addWidget(self.proxy_card)
 
-        # actions
+        # actions (only while connected)
         self.actions = QWidget()
         al = QHBoxLayout(self.actions)
-        al.setContentsMargins(0, 0, 0, 0)
-        self.b_test, self.b_rescan = Btn("", "pill"), Btn("", "pill")
+        al.setContentsMargins(0, 2, 0, 0)
+        al.setSpacing(8)
+        self.b_test, self.b_rescan = Btn("", "tonal", icon="bolt"), Btn("", "tonal", icon="refresh")
         for b in (self.b_test, self.b_rescan):
             al.addWidget(b)
-        self.test_lbl = label("", "sub")
+        self.test_lbl = label("", "hint")
         al.addWidget(self.test_lbl)
         al.addStretch()
         self.b_test.clicked.connect(self.run_ping)
@@ -309,27 +360,30 @@ class HomePage(QWidget):
         self.pinged.connect(self.on_pinged)
         v.addWidget(self.actions)
 
-        # mode + core family
+        # connection setup card: mode, core family, collapsible options
         self.seg_mode = Segmented(self.set_mode)
         self.seg_fam = Segmented(self.set_family)
-        v.addWidget(self.seg_mode)
-        v.addWidget(self.seg_fam)
-
-        self.setup, sv = card((12, 12, 12, 14), 12)
+        self.setup, sv = card((12, 12, 12, 12), 10)
         self.summary = SummaryRow(self.toggle_panel)
         self.hint = label("", "hint", True)
         self.panel = QWidget()
         self.panel_l = QVBoxLayout(self.panel)
-        self.panel_l.setContentsMargins(4, 0, 4, 0)
-        self.panel_l.setSpacing(14)
-        for w in (self.summary, self.hint, self.panel):
+        self.panel_l.setContentsMargins(2, 0, 2, 0)
+        self.panel_l.setSpacing(12)
+        for w in (self.seg_mode, self.seg_fam, self.summary, self.hint, self.panel):
             sv.addWidget(w)
+        v.addSpacing(4)
         v.addWidget(self.setup)
 
-        self.logbtn = QPushButton()
-        self.logbtn.setObjectName("mono")
-        self.logbtn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.logbtn.clicked.connect(win.open_logs)
+        # last two log lines; click opens the Logs page
+        self.logbtn = ClickCard(win.open_logs)
+        ll = QVBoxLayout(self.logbtn)
+        ll.setContentsMargins(14, 12, 14, 12)
+        ll.setSpacing(0)
+        self.loglbl = QLabel()
+        self.loglbl.setObjectName("mono")
+        self.loglbl.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        ll.addWidget(self.loglbl)
         v.addWidget(self.logbtn)
         v.addStretch()
 
@@ -359,7 +413,8 @@ class HomePage(QWidget):
 
     # ---- full render
     def refresh(self):
-        self.b_logs.setText(L("logs"))
+        self.b_logs.setToolTip(L("logs"))
+        self.b_set.setToolTip(L("settings"))
         self.b_test.setText(L("ping_testing") if self._testing else L("ping_test"))
         self.b_rescan.setText(L("rescan"))
         for key, (lab, _) in self.st.items():
@@ -374,12 +429,12 @@ class HomePage(QWidget):
         ph, idle = self.ctl.phase, self.idle
         live = ph == "connected"
         c = pal()
-        color = c["primary"] if live else c["sub"] if idle else c["amber"]
+        color = c["teal"] if live else c["sub"] if idle else c["amber"]
         qc = QColor(color)
         self.pill.tint = qc
         self.pill.update()
-        self.dot.setStyleSheet(f"color:{color};font-size:11px;")
-        self.status.setStyleSheet(f"color:{color};font-size:16px;font-weight:600;")
+        self.dot.set_color(qc)
+        self.status.setStyleSheet(f"color:{color};font-size:15px;font-weight:600;")
         self.status.setText(L(ph))
         self.btn.set_phase(ph)
         self.proxy_card.setVisible(S.mode == "proxy")
@@ -392,8 +447,9 @@ class HomePage(QWidget):
         self.panel.setVisible(self._panel_open and idle)
         mode = L("vpn") if S.mode == "vpn" else L("proxy")
         self.summary.setText(f"{mode}  ·  {active_label()}")
-        self.summary.kind = "lock" if not idle else ("up" if self._panel_open else "down")
+        self.summary.kind = "lock" if not idle else ("chev_up" if self._panel_open else "chevron")
         self.summary.setEnabled(idle)
+        self.summary.restyle()
         self.summary.update()
         self.drop.setText(L("last_drop", r=self._reason) if self._reason else "")
         self.update_stats()
@@ -412,17 +468,26 @@ class HomePage(QWidget):
             self.st[k][1].setText(t)
 
     def update_flag(self):
-        """Exit-country flag next to the status while connected through Psiphon."""
-        m = re.search(r"\(([A-Za-z]{2})\)\s*$", self._exit or "")
-        cc = m.group(1).upper() if m else ""
-        pm = flag_pixmap(cc, 26) if cc and self.ctl.phase == "connected" and core.route_of(S).psiphon else None
+        """Flag of the exit country next to the status while connected; Tor shows the 'auto' globe."""
+        r = core.route_of(S)
+        pm, key, tip = None, "", ""
+        if self.ctl.phase == "connected":
+            if r.family == "tor":
+                pm, key = flag_pixmap("", 26), "tor"
+            else:
+                m = re.search(r"\(([A-Za-z]{2})\)\s*$", self._exit or "")
+                cc = m.group(1).upper() if m else ""
+                if not cc and r.psiphon and len(S.psiphon_region) == 2:
+                    cc = S.psiphon_region.upper()
+                if cc:
+                    pm, key, tip = flag_pixmap(cc, 26), cc, region_name(cc)
         if pm is None or pm.isNull():
             self.flag.hide()
             return
-        if self.flag.property("cc") != cc:
+        if self.flag.property("cc") != key:
             self.flag.setPixmap(pm)
-            self.flag.setToolTip(region_name(cc))
-            self.flag.setProperty("cc", cc)
+            self.flag.setToolTip(tip)
+            self.flag.setProperty("cc", key)
         self.flag.show()
 
     def update_status_line(self):
@@ -447,9 +512,8 @@ class HomePage(QWidget):
     def update_logs(self):
         lines = list(self.ctl.logs)[-2:]
         self.logbtn.setVisible(bool(lines))
-        fm = self.logbtn.fontMetrics()
-        self.logbtn.setText("\n".join(fm.elidedText(l, Qt.TextElideMode.ElideRight, 340) for l in lines))
-        self.logbtn.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        fm = self.loglbl.fontMetrics()
+        self.loglbl.setText("\n".join(fm.elidedText(l, Qt.TextElideMode.ElideRight, 340) for l in lines))
 
     # ---- panel
     def build_panel(self):
@@ -569,15 +633,7 @@ class SettingsPage(QWidget):
 
     def build(self):
         keep = self.scroll.verticalScrollBar().value() if self.scroll else 0
-        while self.root.count():
-            it = self.root.takeAt(0)
-            if it.layout():
-                while it.layout().count():
-                    w = it.layout().takeAt(0).widget()
-                    if w:
-                        w.deleteLater()
-            elif it.widget():
-                it.widget().deleteLater()
+        clear_layout(self.root)
         about = IconButton("info", 42, 2.0)
         about.clicked.connect(self.win.open_about)
         self.root.addLayout(page_header(L("settings"), self.win.go_home, [about]))
@@ -585,16 +641,14 @@ class SettingsPage(QWidget):
         locked = self.ctl.phase != "idle"
         body = QWidget()
         v = QVBoxLayout(body)
-        v.setContentsMargins(0, 6, 10, 10)
-        v.setSpacing(14)
+        v.setContentsMargins(0, 0, 10, 10)
+        v.setSpacing(8)
         self.scroll = scrolling(body)
         self.root.addWidget(self.scroll)
 
         def group(title_key, *, lock=False):
-            gl = label(L(title_key), "gtitle")
+            v.addWidget(SectionTitle(L(title_key)))
             fr, lay = card((16, 16, 16, 16), 16)
-            lay.setSpacing(16)
-            v.addWidget(gl)
             v.addWidget(fr)
             fr.setEnabled(not (lock and locked))
             return lay
@@ -603,19 +657,15 @@ class SettingsPage(QWidget):
             lay.addWidget(field(title, Chips(items, S.d[key], lambda x, k=key: self.put(k, x, rebuild))))
 
         def switch(lay, title, key):
-            sw = Switch(bool(S.d[key]))
-            sw.toggled.connect(lambda val, k=key: self.put(k, bool(val)))
-            lay.addWidget(inline_row(title, sw))
+            lay.addWidget(SwitchRow(title, bool(S.d[key]), lambda val, k=key: self.put(k, bool(val))))
 
         def number(lay, title, key, lo, hi):
             sp = QSpinBox()
             sp.setRange(lo, hi)
             sp.setValue(int(S.d[key]))
             sp.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-            sp.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            sp.setFixedWidth(110)
             sp.valueChanged.connect(lambda val, k=key: self.put(k, int(val)))
-            lay.addWidget(inline_row(title, sp))
+            lay.addWidget(field(title, sp))
 
         def text(lay, title, key, hint="", endpoint=False):
             e = QLineEdit(str(S.d[key]))
@@ -638,14 +688,13 @@ class SettingsPage(QWidget):
         def action(lay, icon, title, fn, danger=False, enabled=True):
             b = Btn("", "action")
             b.setStyleSheet("QPushButton#action { padding: 0; }")
-            b.setMinimumHeight(50)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setMinimumHeight(48)
             b.setEnabled(enabled)
             b.clicked.connect(fn)
             h = QHBoxLayout(b)
-            h.setContentsMargins(16, 8, 16, 8)
+            h.setContentsMargins(14, 8, 14, 8)
             h.setSpacing(12)
-            ic = Icon(icon, 22, "danger" if danger else "primary", 2.0)
+            ic = Icon(icon, 20, "danger" if danger else "primary", 2.0)
             t = QLabel(title)
             t.setStyleSheet(f"color:{pal()['danger'] if danger else pal()['text']};")
             for w in (ic, t):
@@ -655,10 +704,7 @@ class SettingsPage(QWidget):
             lay.addWidget(b)
 
         if locked:
-            note, nl = card((16, 12, 16, 12))
-            note.kind = "banner"
-            nl.addWidget(label(L("locked_hint"), None, True))
-            v.addWidget(note)
+            v.addWidget(banner(L("locked_hint")))
 
         g = group("sec_general")
         chips(g, L("language"), "language", [("fa", "فارسی"), ("en", "English")], False)
@@ -735,36 +781,68 @@ class LogsPage(QWidget):
         self.win, self.ctl = win, win.ctl
         self.root = QVBoxLayout(self)
         self.root.setContentsMargins(16, 0, 14, 12)
-        self.view = QPlainTextEdit()
+        self.view = QTextEdit()
         self.view.setReadOnly(True)
-        self.view.setMaximumBlockCount(600)
+        self.view.setFrameShape(QFrame.Shape.NoFrame)
         self.view.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.header = None
+        self.holder = Card("card")
+        hl = QVBoxLayout(self.holder)
+        hl.setContentsMargins(14, 12, 8, 12)
+        hl.addWidget(self.view)
+        self.empty = QWidget()
+        el = QVBoxLayout(self.empty)
+        el.addStretch()
+        el.addWidget(Icon("logs", 44, "line"), 0, Qt.AlignmentFlag.AlignHCenter)
+        el.addSpacing(12)
+        self.empty_lbl = QLabel()
+        self.empty_lbl.setObjectName("sub")
+        self.empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        el.addWidget(self.empty_lbl)
+        el.addStretch()
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(200)
+        self._timer.timeout.connect(self.render)
         self.ctl.log.connect(self.append)
 
-    def append(self, line):
-        self.view.appendPlainText(line)
+    def append(self, _line):
+        if self.isVisible() and not self._timer.isActive():
+            self._timer.start()
+
+    def render(self):
+        """Newest line first; timestamps dimmed, error lines in the error colour (like the Android Logs page)."""
+        lines = list(self.ctl.logs)
+        self.empty.setVisible(not lines)
+        self.holder.setVisible(bool(lines))
+        c = pal()
+        out = []
+        for ln in reversed(lines):
+            bad = "error" in ln.lower() or "fail" in ln.lower()
+            body = c["danger"] if bad else c["text"]
+            if len(ln) > 9 and ln[2] == ":" and ln[5] == ":":
+                out.append(f'<span style="color:{c["sub"]}">{html.escape(ln[:8])}</span>'
+                           f'<span style="color:{body}">{html.escape(ln[8:])}</span>')
+            else:
+                out.append(f'<span style="color:{body}">{html.escape(ln)}</span>')
+        self.view.setHtml('<div style="white-space:pre-wrap">' + "<br>".join(out) + "</div>")
 
     def build(self):
-        while self.root.count():
-            it = self.root.takeAt(0)
-            if it.layout():
-                while it.layout().count():
-                    w = it.layout().takeAt(0).widget()
-                    if w and w is not self.view:
-                        w.deleteLater()
-        cp, tr = IconButton("copy", 42, 2.0), IconButton("trash", 42, 2.0)
-        cp.clicked.connect(lambda: QApplication.clipboard().setText(self.view.toPlainText()))
-        tr.clicked.connect(self.clear)
-        self.root.addLayout(page_header(L("logs"), self.win.go_home, [cp, tr]))
-        self.root.addWidget(self.view)
+        clear_layout(self.root, keep=(self.holder, self.empty))
+        cp, rm = IconButton("copy", 42, 2.0), IconButton("trash", 42, 2.0, tint="danger")
+        cp.clicked.connect(lambda: QApplication.clipboard().setText("\n".join(self.ctl.logs)))
+        rm.clicked.connect(self.clear)
+        self.root.addLayout(page_header(L("logs"), self.win.go_home, [cp, rm]))
+        self.root.addWidget(self.holder, 1)
+        self.root.addWidget(self.empty, 1)
+        self.empty_lbl.setText(L("no_logs"))
+        self.render()
 
     def show_all(self):
-        self.view.setPlainText("\n".join(self.ctl.logs))
+        self.render()
 
     def clear(self):
         self.ctl.logs.clear()
-        self.view.clear()
+        self.render()
         self.win.home.update_logs()
 
 
@@ -815,70 +893,97 @@ class AboutPage(QWidget):
         self.build()
 
     def build(self):
-        while self.root.count():
-            it = self.root.takeAt(0)
-            if it.layout():
-                while it.layout().count():
-                    w = it.layout().takeAt(0).widget()
-                    if w:
-                        w.deleteLater()
-            elif it.widget():
-                it.widget().deleteLater()
+        clear_layout(self.root)
+        c = pal()
         self.root.addLayout(page_header(L("about"), self.win.open_settings))
         body = QWidget()
         v = QVBoxLayout(body)
-        v.setContentsMargins(0, 8, 10, 10)
+        v.setContentsMargins(0, 0, 10, 10)
         v.setSpacing(14)
         self.root.addWidget(scrolling(body))
 
-        logo = QLabel()
-        logo.setPixmap(self.win.icon.pixmap(84, 84))
-        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # logo, name and version badge
+        head = QWidget()
+        hl = QVBoxLayout(head)
+        hl.setContentsMargins(0, 8, 0, 0)
+        hl.setSpacing(0)
         name = QLabel("8 VPN")
-        name.setStyleSheet("font-size:26px;")
-        name.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        v.addWidget(logo)
-        v.addWidget(name)
+        name.setStyleSheet("font-size:24px;font-weight:700;")
+        pc = QColor(c["primary"])
+        badge = QLabel("v" + VERSION)
+        badge.setStyleSheet(f"background: rgba({pc.red()},{pc.green()},{pc.blue()},36); color:{c['primary']};"
+                            "border-radius: 11px; padding: 3px 12px; font-size: 12px; font-weight: 600;")
+        hl.addWidget(LogoMark(84), 0, Qt.AlignmentFlag.AlignHCenter)
+        hl.addSpacing(14)
+        hl.addWidget(name, 0, Qt.AlignmentFlag.AlignHCenter)
+        hl.addSpacing(6)
+        hl.addWidget(badge, 0, Qt.AlignmentFlag.AlignHCenter)
+        v.addWidget(head)
 
         ver = read_versions()
         unknown = L("version_unknown")
-        c, cl = card((18, 16, 18, 16), 14)
+        info, il = card((16, 16, 16, 16), 14)
         for title, val in ((L("app_version"), VERSION), (L("core_version"), ver.get("aether", unknown)),
                            (L("singbox_version"), ver.get("singbox", unknown))):
             row = QHBoxLayout()
-            row.addWidget(QLabel(title), 1)
+            lab = QLabel(title)
+            lab.setStyleSheet(f"color:{c['sub']};")
             val_l = QLabel(val)
-            val_l.setObjectName("sub")
+            val_l.setStyleSheet("font-weight:600;")
+            row.addWidget(lab, 1)
             row.addWidget(val_l)
-            cl.addLayout(row)
-        v.addWidget(c)
+            il.addLayout(row)
+        v.addWidget(info)
+
+        def tile_row(on_click, kind, title_text, sub_text, title_color=None, sub_style=None, trailing=True):
+            rc = ClickCard(on_click)
+            rl = QHBoxLayout(rc)
+            rl.setContentsMargins(14, 14, 14, 14)
+            rl.setSpacing(14)
+            rl.addWidget(Tile(kind, 42, 22))
+            col = QVBoxLayout()
+            col.setSpacing(0)
+            t = label(title_text, None, True)
+            t.setStyleSheet(f"font-weight:600;color:{title_color or c['text']};")
+            col.addWidget(t)
+            if sub_text:
+                s = label(sub_text, None, True)
+                s.setStyleSheet(sub_style or f"font-size:12px;color:{c['sub']};")
+                col.addWidget(s)
+            rl.addLayout(col, 1)
+            if trailing:
+                rl.addWidget(Icon("chev_left" if rtl() else "chev_right", 20, "sub"))
+            v.addWidget(rc)
 
         # update check (same idea as the Android app)
-        c, cl = card((8, 8, 8, 8), 6)
         state, data = self._upd
-        b = Btn(L("update_available", v=data[0]) if state == "available" else L("update_check"), "action")
-        b.setEnabled(state != "checking")
-        b.clicked.connect(self.check_update)
-        cl.addWidget(b)
+        avail = state == "available"
         note = {"idle": "update_tap", "checking": "update_checking", "latest": "update_latest",
                 "failed": "update_failed"}.get(state)
-        if note:
-            hint = label(L(note), "hint", True)
-            hint.setContentsMargins(12, 0, 12, 6)
-            cl.addWidget(hint)
-        v.addWidget(c)
+        sub_color = c["danger"] if state == "failed" else c["sub"]
+        tile_row(self.check_update, "down" if avail else "refresh",
+                 L("update_available", v=data[0]) if avail else L("update_check"), L(note) if note else "",
+                 title_color=c["primary"] if avail else None,
+                 sub_style=f"font-size:12px;color:{sub_color};", trailing=False)
 
-        c, cl = card((8, 8, 8, 8), 2)
-        for title, url in ((L("github"), GITHUB), (L("github_android"), GITHUB_ANDROID), (L("telegram"), TELEGRAM)):
-            b = Btn(title, "action")
-            b.clicked.connect(lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
-            cl.addWidget(b)
-        v.addWidget(c)
+        def open_url(u):
+            return lambda: QDesktopServices.openUrl(QUrl(u))
 
-        c, cl = card((18, 16, 18, 16), 10)
-        cl.addWidget(label(L("license_title"), "gtitle"))
-        cl.addWidget(label(L("license_text"), "sub", True))
-        v.addWidget(c)
+        tile_row(open_url(GITHUB), "code", L("github"), GITHUB.replace("https://github.com/", ""),
+                 sub_style=f"font-family:Consolas,monospace;font-size:12px;color:{c['sub']};")
+        tile_row(open_url(GITHUB_ANDROID), "code", L("github_android"), GITHUB_ANDROID.replace("https://github.com/", ""),
+                 sub_style=f"font-family:Consolas,monospace;font-size:12px;color:{c['sub']};")
+        tile_row(open_url(TELEGRAM), "send", L("telegram"), "@" + TELEGRAM.rstrip("/").rsplit("/", 1)[-1],
+                 sub_style=f"font-family:Consolas,monospace;font-size:12px;color:{c['sub']};")
+
+        lic, ll = card((16, 16, 16, 16), 10)
+        ll.addWidget(label(L("license_title"), "gtitle"))
+        ll.addWidget(label(L("license_text"), "sub", True))
+        credits = QLabel("github.com/CluvexStudio/Aether\ngithub.com/SagerNet/sing-box\nwintun.net")
+        credits.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        credits.setStyleSheet(f"font-family:Consolas,monospace;font-size:12px;color:{c['sub']};")
+        ll.addWidget(credits)
+        v.addWidget(lic)
         v.addStretch()
 
 

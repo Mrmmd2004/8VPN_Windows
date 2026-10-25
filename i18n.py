@@ -63,6 +63,7 @@ T = {
         "update_checking": "Checking…", "update_latest": "You have the latest version",
         "update_failed": "Could not check. Check your connection and try again",
         "update_available": "Version {v} is available. Click to download",
+        "no_logs": "No logs yet",
     },
     "fa": {
         "idle": "متصل نیست", "connecting": "در حال اتصال…", "connected": "متصل شد",
@@ -128,6 +129,7 @@ T = {
         "update_checking": "در حال بررسی…", "update_latest": "آخرین نسخه را دارید",
         "update_failed": "بررسی نشد. اتصال را بررسی کنید و دوباره امتحان کنید",
         "update_available": "نسخه‌ی {v} موجود است. برای دانلود بزنید",
+        "no_logs": "هنوز لاگی ثبت نشده",
     },
 }
 
