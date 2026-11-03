@@ -1,4 +1,4 @@
-"""Widget kit that gives the Windows app the same look as the Android app (3.8 design):
+"""Widget kit that gives the Windows app the same look as the Android app (4.8 design):
 indigo/teal palette, round bordered icon buttons, tonal pills, filled segmented switch,
 gradient logo and a glowing connect button."""
 import math
@@ -299,6 +299,11 @@ def paint_icon(p: QPainter, kind: str, r: QRectF, color: QColor, w: float = 2.0)
     elif kind == "send":
         poly(True, 21, 3, 3, 10.5, 10, 13, 13, 20)
         line(10, 13, 21, 3)
+    elif kind == "pause":
+        line(9, 6, 9, 18)
+        line(15, 6, 15, 18)
+    elif kind == "play":
+        poly(True, 8, 5.5, 18.5, 12, 8, 18.5)
     elif kind == "close":
         line(6, 6, 18, 18)
         line(18, 6, 6, 18)

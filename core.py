@@ -1,6 +1,6 @@
 """8 VPN for Windows - engine side.
 
-    apps -> TUN (sing-box, gVisor) -> SOCKS5 127.0.0.1:<port> -> Aether -> internet
+    apps -> TUN (sing-box) -> SOCKS5 127.0.0.1:<port> -> Aether -> internet
 
 Two modes:
   * VPN   - sing-box owns a Wintun adapter and routes the whole PC through Aether (needs admin).
@@ -21,7 +21,7 @@ from collections import deque
 from PyQt6.QtCore import QObject, pyqtSignal
 
 APP_NAME = "8VPN"
-VERSION = "3.8"
+VERSION = "4.8"
 TELEGRAM = "https://t.me/Clubapp8"
 
 NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW
@@ -53,6 +53,16 @@ SINGBOX_EXE = os.path.join(CORE_DIR, "sing-box.exe")
 WINTUN_DLL = os.path.join(CORE_DIR, "wintun.dll")
 
 
+def valid_host(v: str) -> bool:
+    p = (v or "").strip().split(".")
+    return len(p) == 4 and all(x.isdigit() and len(x) <= 3 and int(x) <= 255 for x in p)
+
+
+def clean_host(v: str) -> str:
+    """A listen address typed in Settings: a valid IPv4 address, else 0.0.0.0 (every network)."""
+    return v.strip() if valid_host(v) else "0.0.0.0"
+
+
 # ------------------------------------------------------------- settings
 DEFAULTS = {
     "language": "fa",
@@ -74,7 +84,7 @@ DEFAULTS = {
     "ping_fails": 3,
     "ping_interval": 5,
     "mtu": 1500,
-    "tun_stack": "gvisor",       # gvisor | system | mixed
+    "tun_stack": "mixed",        # mixed | system | gvisor (mixed = system TCP + gVisor UDP, the fastest on Windows)
     "perf": "auto",
     "dns": "",
     "endpoint": "",
@@ -86,6 +96,12 @@ DEFAULTS = {
     "socks_port": 1819,
     "http_port": 1822,
     "system_proxy": True,        # proxy mode: also set the Windows system proxy
+    "http_enabled": False,       # run the local HTTP proxy in every mode (proxy mode with system proxy always has it)
+    "socks_share": False,        # SOCKS5 listens on socks_host (LAN / hotspot) instead of 127.0.0.1 only
+    "socks_host": "0.0.0.0",
+    "http_share": False,         # HTTP proxy listens on http_host instead of 127.0.0.1 only
+    "http_host": "0.0.0.0",
+    "keep_awake": True,          # stop Windows from sleeping while connected
     "free_ports": True,          # on connect: close whatever already listens on our ports
     "autostart": False,
     "auto_connect": False,
@@ -95,7 +111,7 @@ DEFAULTS = {
     "split_apps": "",            # comma separated program names, e.g. chrome.exe, telegram.exe
     "schema": 0,
 }
-SCHEMA = 3
+SCHEMA = 4
 
 PROTOCOLS = [
     ("wg", "WireGuard"),
@@ -183,14 +199,20 @@ class Settings:
         self._sanitize()
 
     def _migrate(self):
-        """One-time reset of the connection tuning to the Android 3.8 defaults (MASQUE over HTTP/2,
-        3 attempts, 3 failed pings, fresh scan after a drop). Language, theme, ports, mode and the
-        other personal options are kept."""
+        """One-time resets when the schema changes. Language, theme, ports, mode and the other personal
+        options are kept.
+          3: connection tuning back to the Android 3.8 defaults (MASQUE over HTTP/2, 3 attempts, 3 failed
+             pings, fresh scan after a drop)
+          4: TUN stack back to the new default (mixed) - gVisor was the old default and is slower"""
         d = self.d
-        if d.get("schema", 0) < SCHEMA:
-            for k in ("protocol", "carrier", "quick_reconnect", "fresh_after_drop", "max_tries",
-                      "retry_delay_ms", "ping_fails", "ping_interval"):
-                d[k] = DEFAULTS[k]
+        old = d.get("schema", 0)
+        if old < SCHEMA:
+            if old < 3:
+                for k in ("protocol", "carrier", "quick_reconnect", "fresh_after_drop", "max_tries",
+                          "retry_delay_ms", "ping_fails", "ping_interval"):
+                    d[k] = DEFAULTS[k]
+            if old < 4:
+                d["tun_stack"] = DEFAULTS["tun_stack"]
             d["schema"] = SCHEMA
             self.save()
 
@@ -225,6 +247,8 @@ class Settings:
                 d[k] = DEFAULTS[k]
         if d["split_mode"] not in ("off", "include", "exclude"):
             d["split_mode"] = "off"
+        if d["tun_stack"] not in ("mixed", "system", "gvisor"):
+            d["tun_stack"] = DEFAULTS["tun_stack"]
 
     def tries(self): return max(1, min(999, self.max_tries))
     def retry_s(self): return max(0.1, min(60.0, self.retry_delay_ms / 1000))
@@ -238,6 +262,7 @@ S = Settings()
 
 # ----------------------------------------------------------- helpers
 _ansi = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_sb_keep = re.compile(r"\b(WARN|ERROR|FATAL|PANIC)\b|started|stopped")
 _ep = re.compile(r"^(\d{1,3}(\.\d{1,3}){3}|\[[0-9a-fA-F:.]+\]):(\d{1,5})$")
 
 
@@ -263,9 +288,48 @@ def split_args(v: str):
         return (v or "").split()
 
 
+def socks_bind(s) -> str:
+    return clean_host(s.socks_host) if s.socks_share else "127.0.0.1"
+
+
+def http_bind(s) -> str:
+    return clean_host(s.http_host) if s.http_share else "127.0.0.1"
+
+
+def http_on(s) -> bool:
+    """The Aether HTTP proxy runs when asked for, and always in Proxy mode with the system proxy."""
+    return bool(s.http_enabled or (s.mode == "proxy" and s.system_proxy))
+
+
+def local_of(bind: str) -> str:
+    """Address this app uses to reach a listener that is bound to `bind`."""
+    return "127.0.0.1" if bind in ("0.0.0.0", "") else bind
+
+
+# Set at the start of a session, so probes and sing-box talk to the address the core really bound.
+LOCAL = {"host": "127.0.0.1"}
+
+
+def lan_addresses():
+    """IPv4 addresses other devices can use to reach this PC: [(adapter name, ip)]."""
+    out = []
+    try:
+        import psutil
+        up = psutil.net_if_stats()
+        for name, addrs in psutil.net_if_addrs().items():
+            if name == "8VPN" or "loopback" in name.lower() or (name in up and not up[name].isup):
+                continue
+            for a in addrs:
+                if a.family == socket.AF_INET and not a.address.startswith(("127.", "169.254.", "172.19.0.")):
+                    out.append((name, a.address))
+    except Exception:
+        pass
+    return out
+
+
 def port_open(port: int) -> bool:
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.4):
+        with socket.create_connection((LOCAL["host"], port), timeout=0.4):
             return True
     except OSError:
         return False
@@ -466,7 +530,7 @@ def _read_full(s, n):
 def socks_get(port: int, host: str, path: str, timeout: float = 6.0):
     """HTTP GET through the local SOCKS5 proxy. Returns (ms to first byte, text) or None."""
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=timeout) as s:
+        with socket.create_connection((LOCAL["host"], port), timeout=timeout) as s:
             s.settimeout(timeout)
             t0 = time.perf_counter()
             s.sendall(b"\x05\x01\x00")
@@ -507,7 +571,7 @@ def socks_download(port: int, host: str, path: str, max_bytes: int, budget: floa
     """Downloads up to max_bytes over plain HTTP through the SOCKS5 port.
     Returns (status, body bytes, ms) or None."""
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        with socket.create_connection((LOCAL["host"], port), timeout=5) as s:
             s.settimeout(5)
             s.sendall(b"\x05\x01\x00")
             if _read_full(s, 2) != b"\x05\x00":
@@ -648,9 +712,9 @@ def clean_psiphon_dirs(slot: int):
 def aether_args(s, fresh: bool, psi_slot: int = 0):
     r = route_of(s)
     a = ["--config", os.path.join(DATA_DIR, "aether", "aether.toml"),
-         "--bind", f"127.0.0.1:{s.socks_port}"]
-    if s.mode == "proxy" and s.system_proxy:
-        a += ["--http-proxy", f"127.0.0.1:{s.http_port}"]
+         "--bind", f"{socks_bind(s)}:{s.socks_port}"]
+    if http_on(s):
+        a += ["--http-proxy", f"{http_bind(s)}:{s.http_port}"]
 
     a += {"aether_psiphon": ["--psiphon"], "psiphon_only": ["--psiphon-only"], "psiphon_reverse": ["--psiphon-reverse"],
           "aether_tor": ["--tor"], "tor_only": ["--tor-only"], "tor_reverse": ["--tor-reverse"]}.get(r.name, [])
@@ -702,14 +766,14 @@ def aether_args(s, fresh: bool, psi_slot: int = 0):
             a += ["--psiphon-bin", exe]
         a += ["--psiphon-dir", psiphon_dir(psi_slot)]
         if r.name != "psiphon_only":
-            a += ["--psiphon-bind", f"127.0.0.1:{PSIPHON_PORT}"]
+            a += ["--psiphon-bind", f"{socks_bind(s)}:{PSIPHON_PORT}"]
         a += ["--psiphon-mode", s.psiphon_mode]
         if s.psiphon_region.strip():
             a += ["--psiphon-region", s.psiphon_region.strip().upper()]
     if r.tor:
         a += ["--tor-dir", os.path.join(DATA_DIR, "aether", "tor")]
         if r.name != "tor_only":
-            a += ["--tor-bind", f"127.0.0.1:{TOR_PORT}"]
+            a += ["--tor-bind", f"{socks_bind(s)}:{TOR_PORT}"]
         if s.tor_bridges == "always":
             a.append("--tor-bridges")
         elif s.tor_bridges == "never":
@@ -732,7 +796,7 @@ def split_names(v: str):
     return list(dict.fromkeys(out))
 
 
-def singbox_config(s) -> dict:
+def singbox_config(s, stack=None) -> dict:
     r = route_of(s)
     v6 = s.ip_version != "4" and not r.slow
     addr = ["172.19.0.1/30"] + (["fdfe:dcba:9876::1/126"] if v6 else [])
@@ -766,10 +830,10 @@ def singbox_config(s) -> dict:
         },
         "inbounds": [{
             "type": "tun", "tag": "tun-in", "interface_name": "8VPN",
-            "address": addr, "mtu": s.mtu_v(), "auto_route": True, "stack": s.tun_stack,
+            "address": addr, "mtu": s.mtu_v(), "auto_route": True, "stack": stack or s.tun_stack,
         }],
         "outbounds": [
-            {"type": "socks", "tag": "proxy", "server": "127.0.0.1", "server_port": exit_port(s), "version": "5"},
+            {"type": "socks", "tag": "proxy", "server": LOCAL["host"], "server_port": exit_port(s), "version": "5"},
             {"type": "direct", "tag": "direct"},
         ],
         "route": {"auto_detect_interface": True, "find_process": True, "rules": rules, "final": "proxy"},
@@ -790,6 +854,7 @@ class Controller(QObject):
     traffic = pyqtSignal(float, float)  # download B/s, upload B/s
     exit_info = pyqtSignal(str)
     speed = pyqtSignal(float)           # link speed B/s, -1 = measuring / unknown
+    paused = pyqtSignal(bool)           # VPN adapter switched off while the core keeps running
 
     def __init__(self):
         super().__init__()
@@ -804,6 +869,10 @@ class Controller(QObject):
         self._aether = None
         self._singbox = None
         self._sb_started = False
+        self.is_paused = False           # Pause button: adapter off, core still running
+        self._tun_busy = False           # the adapter is being paused / resumed / recycled: not a crash
+        self._cur = None                 # settings of the running session
+        self._stalls = 0                 # TUN data stalls seen in this session
         self._psiphon_ready = False
         self._socks_ready = False        # Aether validated the tunnel and opened its SOCKS port
         self._datastore_failed = False   # Psiphon could not open its database (a helper holds the lock)
@@ -869,18 +938,28 @@ class Controller(QObject):
 
     def _run(self):
         s = Eff(S)
+        self._cur = s
+        self._stalls = 0
+        LOCAL["host"] = local_of(socks_bind(s))
         tries = s.tries()
         failures = cycle = 0
         ever_up = force_fresh = False
         self._psi_slot = 0
+        self.is_paused = False
         self._net_changed.clear()
         watch_stop = threading.Event()
         threading.Thread(target=self._watch_net, args=(watch_stop,), daemon=True, name="8vpn-netwatch").start()
+        if s.keep_awake:
+            threading.Thread(target=self._keep_awake, args=(watch_stop,), daemon=True, name="8vpn-awake").start()
         try:
             while not self._stop.is_set():
                 attempt = failures + 1
                 self._set("reconnecting" if ever_up else "connecting", attempt, tries)
                 self.message.emit("")
+                if ever_up:
+                    self._await_network()   # offline (cable out, Wi-Fi off): wait without burning attempts
+                    if self._stop.is_set():
+                        break
                 # A fresh scan only after a real drop or after a whole round of failed attempts.
                 fresh = cycle > 0 or force_fresh
                 force_fresh = False
@@ -948,8 +1027,15 @@ class Controller(QObject):
                     failures = 0
                     cycle += 1
                     if cycle >= 2:
-                        self.message.emit("connect_failed")
-                        break
+                        if not ever_up:
+                            self.message.emit("connect_failed")
+                            break
+                        # It worked before, so this is usually the PC being offline (sleep, no network).
+                        # Do not give up: keep trying slowly and come back by itself.
+                        cycle = 1
+                        self._log("Still offline. 8 VPN keeps trying every 20 s")
+                        self._teardown()
+                        self._sleep(20)
                     self._log("No luck. Dropping everything and starting over with a fresh scan")
                 self._sleep(s.retry_s())
         except Fatal as e:
@@ -962,6 +1048,9 @@ class Controller(QObject):
             watch_stop.set()
             self._set("stopping") if self._stop.is_set() else None
             self._teardown()
+            if self.is_paused:
+                self.is_paused = False
+                self.paused.emit(False)
             self.ping.emit(-1)
             self.traffic.emit(0, 0)
             self.exit_info.emit("")
@@ -981,7 +1070,7 @@ class Controller(QObject):
                 raise Fatal("need_admin")
         r = route_of(s)
         ports = {s.socks_port, exit_port(s)}
-        if s.mode == "proxy" and s.system_proxy:
+        if http_on(s):
             ports.add(s.http_port)
         if s.free_ports and any(port_open(p) for p in ports):
             kill_leftovers(self._log)
@@ -1032,43 +1121,173 @@ class Controller(QObject):
 
         # 2) mode specific part
         if vpn:
+            if self.is_paused:   # paused by the user: the core comes back, the adapter stays off
+                return True
             return self._start_tun(s)
         if s.system_proxy:
-            set_system_proxy(f"127.0.0.1:{s.http_port}")
+            addr = f"{local_of(http_bind(s))}:{s.http_port}"
+            set_system_proxy(addr)
             self._proxy_on = True
-            self._log(f"system proxy set to 127.0.0.1:{s.http_port}")
+            self._log(f"system proxy set to {addr}")
         return True
 
     def _start_tun(self, s) -> bool:
+        """Starts sing-box on a Wintun adapter. The configured stack is tried first and gVisor (slower but
+        works everywhere) is the fallback if sing-box cannot start with it."""
+        stacks = list(dict.fromkeys([s.tun_stack, "gvisor"]))
+        for i, stack in enumerate(stacks):
+            if self._launch_singbox(s, stack):
+                return True
+            self._stop_tun()
+            if self._stop.is_set():
+                return False
+            if i + 1 < len(stacks):
+                self._log(f"sing-box did not start with the {stack} stack, trying {stacks[i + 1]}")
+        self.message.emit("tun_failed")
+        return False
+
+    def _tun_ready(self) -> bool:
+        """The 8VPN adapter exists and has its address. sing-box logs at warn level (an info level would
+        print every connection), so its own 'started' line never shows: watch the adapter instead."""
+        if self._sb_started:
+            return True
+        try:
+            import psutil
+            for a in psutil.net_if_addrs().get("8VPN", ()):
+                if a.family == socket.AF_INET and a.address == "172.19.0.1":
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _launch_singbox(self, s, stack) -> bool:
         cfg_path = os.path.join(DATA_DIR, "singbox.json")
         with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump(singbox_config(s), f, indent=2)
+            json.dump(singbox_config(s, stack), f, indent=2)
         work = os.path.join(DATA_DIR, "singbox")
         os.makedirs(work, exist_ok=True)
         self._sb_started = False
-        self._log("starting TUN (sing-box)")
-        self._singbox = subprocess.Popen(
+        self._log(f"starting TUN (sing-box, {stack} stack)")
+        t0 = time.time()
+        proc = subprocess.Popen(
             [SINGBOX_EXE, "run", "-c", cfg_path, "-D", work], cwd=CORE_DIR,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
-        threading.Thread(target=self._pump, args=(self._singbox, "tun"), daemon=True).start()
-        t0 = time.time()
+        self._singbox = proc
+        threading.Thread(target=self._pump, args=(proc, "tun"), daemon=True).start()
         while not self._stop.is_set() and time.time() - t0 < 20:
-            if self._singbox is None or self._singbox.poll() is not None:
+            if proc.poll() is not None:
                 self._log("sing-box exited")
-                self.message.emit("tun_failed")
                 return False
-            if self._sb_started:
-                return True
-            self._sleep(0.1)
-        # no "started" line seen but still alive: accept, the monitor will notice real trouble
-        return self._singbox is not None and self._singbox.poll() is None
+            if self._tun_ready():
+                self._sleep(0.3)   # let it finish installing the routes
+                self._log(f"TUN is up ({time.time() - t0:.1f} s)")
+                return proc.poll() is None
+            self._sleep(0.08)
+        if self._stop.is_set():
+            return False
+        # No adapter seen but the process lives: accept, the monitor will notice real trouble.
+        self._log("sing-box is running but its adapter was not seen in 20 s")
+        return proc.poll() is None
+
+    def _stop_tun(self):
+        """Stops sing-box only (core and gateway stay)."""
+        p, self._singbox = self._singbox, None
+        if p is not None:
+            self._kill(p)
+
+    # ---- pause / resume (the Android Stop / Start buttons) and TUN recycling
+    def pause_vpn(self):
+        if self.phase == "connected" and self._cur is not None and self._cur.mode == "vpn" and not self.is_paused:
+            threading.Thread(target=self._do_pause, daemon=True).start()
+
+    def resume_vpn(self):
+        if self.is_paused and self.phase == "connected":
+            threading.Thread(target=self._do_resume, daemon=True).start()
+
+    def _do_pause(self):
+        with self._td_lock:
+            if self.is_paused or self._stop.is_set():
+                return
+            self.is_paused = True
+            self._tun_busy = True
+            try:
+                self._stop_tun()
+            finally:
+                self._tun_busy = False
+        self._rx_bps = 0.0
+        self.traffic.emit(0, 0)
+        self._log("VPN paused: adapter off, core still running")
+        self.paused.emit(True)
+
+    def _do_resume(self):
+        with self._td_lock:
+            if not self.is_paused or self._stop.is_set() or self._cur is None:
+                return
+            self._tun_busy = True
+            try:
+                ok = self._start_tun(self._cur)
+            finally:
+                self._tun_busy = False
+        if ok:
+            self._last_rx_at = time.time()
+            self.is_paused = False
+            self._log("VPN resumed")
+            self.paused.emit(False)
+        else:
+            self._log("Could not bring the VPN back, try again")
+
+    def _recycle_tun(self) -> bool:
+        """Restarts sing-box on a fresh adapter; the core and its gateway stay. Clears stuck sessions without
+        a slow reconnect."""
+        with self._td_lock:
+            if self.is_paused or self._stop.is_set() or self._cur is None or self.phase != "connected":
+                return False
+            self._stalls += 1
+            if self._stalls >= 2 and self._cur.tun_stack != "gvisor":
+                # Stalled twice on the fast stack: gVisor is slower but the most compatible.
+                self._log("TUN stalled again: switching to the gVisor stack for this session")
+                self._cur.over(tun_stack="gvisor")
+            self._tun_busy = True
+            try:
+                self._stop_tun()
+                return self._start_tun(self._cur)
+            finally:
+                self._tun_busy = False
+
+    def _await_network(self):
+        """After a drop: wait (without using connection attempts) until Windows has a default network."""
+        if not IS_WIN:
+            return
+        logged = False
+        while not self._stop.is_set() and net_signature() is None:
+            if not logged:
+                self._log("No network. Waiting for it to come back")
+                logged = True
+            self._sleep(2)
+
+    def _keep_awake(self, stop_ev):
+        """Keeps Windows from going to sleep while connected (the thread that sets the flag must stay alive)."""
+        if not IS_WIN:
+            return
+        try:
+            k = ctypes.windll.kernel32
+            k.SetThreadExecutionState(0x80000000 | 0x00000001)   # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+            stop_ev.wait()
+        finally:
+            try:
+                ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+            except Exception:
+                pass
 
     def _pump(self, proc, tag):
         try:
             for raw in iter(proc.stdout.readline, b""):
                 line = raw.decode("utf-8", "replace")
-                if tag == "tun" and "started" in line:
-                    self._sb_started = True
+                if tag == "tun":
+                    if "sing-box started" in line:
+                        self._sb_started = True
+                    if not _sb_keep.search(line):
+                        continue
                 if tag == "aether":
                     if "psiphon is ready" in line:
                         self._psiphon_ready = True
@@ -1126,8 +1345,14 @@ class Controller(QObject):
 
     def _stats(self, stop_ev):
         """Once a second: speed shown on Home, and the time data last arrived (used by the monitor
-        to tell a starved probe from a dead link)."""
+        to tell a starved probe from a dead link).
+
+        Also watches the TUN data path. The ping probes go straight to the local SOCKS port and never touch
+        the adapter, so a healthy core with a stuck sing-box looks perfect to them. If the apps keep
+        sending for 20 s and nothing comes back, only sing-box is restarted (same core, same gateway),
+        which clears every stuck session without a slow reconnect."""
         last, last_t = self._tun_counters(), time.time()
+        stall_since, stall_ticks, stall_tx, last_recycle = 0.0, 0, 0.0, 0.0
         while not stop_ev.wait(1.0) and not self._stop.is_set():
             cur, now = self._tun_counters(), time.time()
             if cur and last:
@@ -1137,6 +1362,20 @@ class Controller(QObject):
                 self.traffic.emit(rx, tx)
                 if rx > 0:
                     self._last_rx_at = now
+                if rx > 0 or self.is_paused or self._tun_busy or self.phase != "connected":
+                    stall_since, stall_ticks, stall_tx = 0.0, 0, 0.0
+                elif tx > 0:
+                    stall_since = stall_since or now
+                    stall_ticks += 1
+                    stall_tx += tx * dt
+                    if now - stall_since >= 20 and stall_ticks >= 8 and stall_tx >= 20_000 \
+                            and now - last_recycle >= 60:
+                        self._log(f"VPN data stall: apps kept sending for {int(now - stall_since)} s but nothing "
+                                  "came back. Restarting the TUN (core and gateway stay)")
+                        last_recycle = now
+                        stall_since, stall_ticks, stall_tx = 0.0, 0, 0.0
+                        self._recycle_tun()
+                        cur, now = self._tun_counters(), time.time()
             last, last_t = cur, now
         self._rx_bps = 0.0
 
@@ -1156,7 +1395,8 @@ class Controller(QObject):
     def _core_dead(self, s) -> str:
         if self._aether is None or self._aether.poll() is not None:
             return "r_core"
-        if s.mode == "vpn" and (self._singbox is None or self._singbox.poll() is not None):
+        if s.mode == "vpn" and not self.is_paused and not self._tun_busy \
+                and (self._singbox is None or self._singbox.poll() is not None):
             return "r_tun"
         return ""
 

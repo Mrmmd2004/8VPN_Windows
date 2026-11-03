@@ -1,6 +1,6 @@
 ; Inno Setup script - built by the GitHub workflow
 #ifndef AppVersion
-  #define AppVersion "3.8"
+  #define AppVersion "4.8"
 #endif
 
 [Setup]
