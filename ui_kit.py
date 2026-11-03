@@ -549,7 +549,7 @@ class Card(QFrame):
 
     def __init__(self, kind="card"):
         super().__init__()
-        self.kind, self.tint, self._hover = kind, None, False
+        self.kind, self.tint, self._hover, self.accent = kind, None, False, False
 
     def paintEvent(self, e):
         c, k = pal(), self.kind
@@ -558,7 +558,7 @@ class Card(QFrame):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
         if k == "card":
-            p.setPen(QPen(QColor(c["border"]), 1))
+            p.setPen(QPen(QColor(c["primary"] if self.accent else c["border"]), 1))
             p.setBrush(QColor(c["card2"] if self._hover else c["card"]))
             p.drawRoundedRect(r, 22, 22)
         elif k == "banner":
@@ -596,6 +596,26 @@ class ClickCard(Card):
         if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint()):
             self._cb()
         super().mouseReleaseEvent(e)
+
+
+class SectionHeader(ClickCard):
+    """Settings section as a button: icon tile, title and a chevron. Tapping it opens or closes the options
+    that sit right below it; the open one gets a primary-coloured outline."""
+
+    def __init__(self, icon, title, open_, on_click):
+        super().__init__(on_click)
+        self.accent = open_
+        h = QHBoxLayout(self)
+        h.setContentsMargins(14, 12, 14, 12)
+        h.setSpacing(14)
+        h.addWidget(Tile(icon, 42, 22))
+        lab = QLabel(title)
+        lab.setStyleSheet("font-size:15px;font-weight:600;")
+        lab.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        h.addWidget(lab, 1)
+        chev = Icon("chev_up" if open_ else "chevron", 20, "primary" if open_ else "sub", 2.2)
+        chev.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        h.addWidget(chev)
 
 
 class Btn(QPushButton):
