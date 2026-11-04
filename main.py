@@ -42,7 +42,7 @@ def region_name(cc):
 
 
 def active_label():
-    return core.active_label(S)
+    return core.active_label(core.cfg())   # the running connection's route, or the saved one when idle
 
 
 # ------------------------------------------------------------------ small builders
@@ -451,14 +451,14 @@ class HomePage(QWidget):
             self.status.setStyleSheet(f"color:{color};font-size:15px;font-weight:600;")
         self.status.setText(L("vpn_paused") if paused else L(ph))
         self.btn.set_phase(ph)
-        ss = self.session()
-        show_proxy = ss.mode == "proxy" or ss.socks_share or core.http_on(ss)
+        cf = core.cfg()
+        show_proxy = cf.mode == "proxy" or cf.socks_share or cf.http_enabled
         self.proxy_card.setVisible(show_proxy)
         if show_proxy:
             self.proxy_lbl.setText(self.proxy_text())
         self.actions.setVisible(live)
-        self.b_rescan.setVisible(core.route_of(S).family == "aether")
-        self.b_pause.setVisible(S.mode == "vpn")
+        self.b_rescan.setVisible(core.route_of(cf).family == "aether")
+        self.b_pause.setVisible(cf.mode == "vpn")
         self.b_pause.setText(L("vpn_resume") if self._paused else L("vpn_pause"))
         self.b_pause.icon_kind = "play" if self._paused else "pause"
         self.b_pause.update()
@@ -466,7 +466,7 @@ class HomePage(QWidget):
         self.hint.setVisible(not idle)
         self.hint.setText(L("locked_hint"))
         self.panel.setVisible(self._panel_open and idle)
-        mode = L("vpn") if S.mode == "vpn" else L("proxy")
+        mode = L("vpn") if cf.mode == "vpn" else L("proxy")
         self.summary.setText(f"{mode}  ·  {active_label()}")
         self.summary.kind = "lock" if not idle else ("chev_up" if self._panel_open else "chevron")
         self.summary.setEnabled(idle)
@@ -479,10 +479,11 @@ class HomePage(QWidget):
 
     def update_stats(self):
         live = self.ctl.phase == "connected"
+        vpn = core.cfg().mode == "vpn"
         vals = {
             "ping": L("ms", v=self._ping) if live and self._ping >= 0 else "—",
-            "download": fmt_rate(self._rx) if live and S.mode == "vpn" and not self._paused else "—",
-            "upload": fmt_rate(self._tx) if live and S.mode == "vpn" and not self._paused else "—",
+            "download": fmt_rate(self._rx) if live and vpn and not self._paused else "—",
+            "upload": fmt_rate(self._tx) if live and vpn and not self._paused else "—",
             "link_speed": (fmt_rate(self._speed) if self._speed >= 0 else "…") if live else "—",
         }
         for k, t in vals.items():
@@ -490,7 +491,8 @@ class HomePage(QWidget):
 
     def update_flag(self):
         """Flag of the exit country next to the status while connected; Tor shows the 'auto' globe."""
-        r = core.route_of(S)
+        cf = core.cfg()
+        r = core.route_of(cf)
         pm, key, tip = None, "", ""
         if self.ctl.phase == "connected" and not self._paused:
             if r.family == "tor":
@@ -498,8 +500,8 @@ class HomePage(QWidget):
             else:
                 m = re.search(r"\(([A-Za-z]{2})\)\s*$", self._exit or "")
                 cc = m.group(1).upper() if m else ""
-                if not cc and r.psiphon and len(S.psiphon_region) == 2:
-                    cc = S.psiphon_region.upper()
+                if not cc and r.psiphon and len(cf.psiphon_region) == 2:
+                    cc = cf.psiphon_region.upper()
                 if cc:
                     pm, key, tip = flag_pixmap(cc, 26), cc, region_name(cc)
         if pm is None or pm.isNull():
@@ -536,11 +538,11 @@ class HomePage(QWidget):
 
     def proxy_text(self):
         """Where other programs (and, when shared, other devices) reach the proxy."""
-        S = self.session()   # while connected: what the running session really uses
-        port = core.exit_port(S)   # with Aether -> Psiphon / Tor the usable SOCKS5 port is theirs
-        http = core.http_on(S)
-        out = [L("proxy_info", a=f"{core.local_of(core.socks_bind(S))}:{port}") +
-               (("     " + L("http_info", a=f"{core.local_of(core.http_bind(S))}:{S.http_port}")) if http else "")]
+        cf = core.cfg()
+        port = core.exit_port(cf)   # with Aether -> Psiphon / Tor the usable SOCKS5 port is theirs
+        http = core.http_on(cf)
+        out = [L("proxy_info", a=f"{core.local_of(core.socks_bind(cf))}:{port}") +
+               (("     " + L("http_info", a=f"{core.local_of(core.http_bind(cf))}:{cf.http_port}")) if http else "")]
 
         def shared(host, socks_p=None, http_p=None):
             host = core.clean_host(host)
@@ -554,18 +556,14 @@ class HomePage(QWidget):
                 if http_p:
                     parts.append(L("http_info", a=f"{ip}:{http_p}"))
                 out.append(f"{name or 'LAN'}: " + "     ".join(parts))
-        if S.socks_share and S.http_share and http and core.clean_host(S.socks_host) == core.clean_host(S.http_host):
-            shared(S.socks_host, port, S.http_port)
+        if cf.socks_share and cf.http_share and http and core.clean_host(cf.socks_host) == core.clean_host(cf.http_host):
+            shared(cf.socks_host, port, cf.http_port)
         else:
-            if S.socks_share:
-                shared(S.socks_host, socks_p=port)
-            if S.http_share and http:
-                shared(S.http_host, http_p=S.http_port)
+            if cf.socks_share:
+                shared(cf.socks_host, socks_p=port)
+            if cf.http_share and http:
+                shared(cf.http_host, http_p=cf.http_port)
         return "\n".join(out)
-
-    def session(self):
-        cur = self.ctl._cur
-        return cur if (cur is not None and self.ctl.phase != "idle") else S
 
     def toggle_pause(self):
         if self.ctl.phase != "connected":
@@ -632,7 +630,7 @@ class HomePage(QWidget):
             return
         self._testing = True
         self.b_test.setText(L("ping_testing"))
-        port = core.exit_port(self.session())
+        port = core.exit_port(core.cfg())
 
         def work():
             r = core.socks_get(port, "cp.cloudflare.com", "/generate_204", 8)
@@ -697,9 +695,6 @@ class SettingsPage(QWidget):
 
     def put(self, key, value, rebuild=False):
         S.set(**{key: value})
-        if key in ("http_enabled", "system_proxy", "socks_share", "http_share", "socks_host", "http_host",
-                   "socks_port", "http_port"):
-            self.win.home.update_all()
         if key == "autostart":
             core.set_autostart(bool(value))
         if key in ("language", "theme"):
@@ -715,7 +710,7 @@ class SettingsPage(QWidget):
         about.clicked.connect(self.win.open_about)
         self.root.addLayout(page_header(L("settings"), self.win.go_home, [about]))
 
-        locked = self.ctl.phase != "idle"
+        running = self.ctl.phase != "idle"   # options stay editable; a running connection keeps its own copy
         body = QWidget()
         v = QVBoxLayout(body)
         v.setContentsMargins(0, 0, 10, 10)
@@ -723,11 +718,10 @@ class SettingsPage(QWidget):
         self.scroll = scrolling(body)
         self.root.addWidget(self.scroll)
 
-        def group(title_key, *, lock=False):
+        def group(title_key, **_ignored):
             v.addWidget(SectionTitle(L(title_key)))
             fr, lay = card((16, 16, 16, 16), 16)
             v.addWidget(fr)
-            fr.setEnabled(not (lock and locked))
             return lay
 
         def chips(lay, title, key, items, rebuild=True):
@@ -744,6 +738,7 @@ class SettingsPage(QWidget):
             sp.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
             sp.valueChanged.connect(lambda val, k=key: self.put(k, int(val)))
             lay.addWidget(field(title, sp))
+            return sp
 
         def text(lay, title, key, hint="", endpoint=False, host=False):
             e = QLineEdit(str(S.d[key]))
@@ -763,6 +758,7 @@ class SettingsPage(QWidget):
             if check and S.d[key] and not check(S.d[key]):
                 e.setProperty("bad", "true")
                 lay.addWidget(label(L("endpoint_invalid" if endpoint else "addr_invalid"), "err", True))
+            return e
 
         def action(lay, icon, title, fn, danger=False, enabled=True):
             b = Btn("", "action")
@@ -782,8 +778,12 @@ class SettingsPage(QWidget):
             h.addWidget(t, 1)
             lay.addWidget(b)
 
-        if locked:
-            v.addWidget(banner(L("locked_hint")))
+        if running:
+            v.addWidget(banner(L("apply_next")))
+            rc = Btn(L("reconnect_now"), "tonal", icon="refresh")
+            rc.setMinimumHeight(44)
+            rc.clicked.connect(self.win.reconnect)
+            v.addWidget(rc)
 
         g = group("sec_general")
         chips(g, L("language"), "language", [("fa", "فارسی"), ("en", "English")], False)
@@ -801,7 +801,7 @@ class SettingsPage(QWidget):
             g.addWidget(label(L("split_note"), "hint", True))
         g.addWidget(label(L("admin_note"), "hint", True))
 
-        g = group("sec_core", lock=True)
+        g = group("sec_core")
         chips(g, L("protocol"), "protocol", core.PROTOCOLS)
         chips(g, L("transport"), "carrier", [("h3", "HTTP/3 (QUIC)"), ("h2", "HTTP/2 (TCP)")], False)
         chips(g, L("scan"), "scan", [(x, x) for x in ("turbo", "balanced", "thorough", "verified", "ironclad")], False)
@@ -817,52 +817,76 @@ class SettingsPage(QWidget):
         text(g, L("endpoint2"), "endpoint2", L("endpoint_hint"), True)
         text(g, L("upstream"), "upstream", L("upstream_hint"))
 
-        g = group("sec_routing", lock=True)
+        g = group("sec_routing")
         text(g, L("route_block"), "route_block", L("route_hint"))
         text(g, L("route_direct"), "route_direct", L("route_hint"))
         text(g, L("dns"), "dns", "1.1.1.1, 1.0.0.1")
 
-        g = group("sec_psiphon", lock=True)
+        g = group("sec_psiphon")
         g.addWidget(field(L("region"), RegionRow(lambda: RegionSheet(self.win, S.psiphon_region, lambda cc: self.put("psiphon_region", cc, True)).exec())))
         chips(g, L("psiphon_mode"), "psiphon_mode", [("auto", L("auto")), ("cdn", "CDN")], False)
 
-        g = group("sec_tor", lock=True)
+        g = group("sec_tor")
         chips(g, L("bridges"), "tor_bridges", [("auto", L("auto")), ("always", L("always")), ("never", L("never"))], False)
 
-        g = group("sec_advanced", lock=True)
+        g = group("sec_advanced")
         chips(g, L("perf"), "perf", [(x, x) for x in ("auto", "low", "medium", "high")], False)
         text(g, L("extra"), "extra_args", L("extra_hint"))
         number(g, L("mtu"), "mtu", 1280, 9000)
         chips(g, L("stack"), "tun_stack", [("mixed", "mixed"), ("system", "system"), ("gvisor", "gVisor")], False)
         action(g, "logs", L("open_logs"), self.win.open_logs)
-        action(g, "trash", L("clear_cache"), self.ask_clear, True, not locked)
+        action(g, "trash", L("clear_cache"), self.ask_clear, True, not running)
         if self._note:
             g.addWidget(label(self._note, "hint", True))
 
         g = group("sec_lan")
-        number(g, L("socks"), "socks_port", 1024, 65535)
-        number(g, L("http"), "http_port", 1024, 65535)
+        sp_socks = number(g, L("socks"), "socks_port", 1024, 65535)
+        sp_http = number(g, L("http"), "http_port", 1024, 65535)
         switch(g, L("http_local"), "http_enabled")
         switch(g, L("http_proxy"), "system_proxy")
         switch(g, L("free_ports"), "free_ports")
         g.addWidget(label(L("ports_note"), "hint", True))
         lay_sw = lambda title, key: g.addWidget(SwitchRow(title, bool(S.d[key]), lambda val, k=key: self.put(k, bool(val), True)))
+
+        def addr_text(kind):
+            """Where other devices reach this proxy: one 'ip:port' line per network address of this PC."""
+            if kind == "socks":
+                host, port, tag = S.socks_host, core.exit_port(S), "SOCKS5"   # Psiphon / Tor routes use their own port
+            else:
+                host, port, tag = S.http_host, S.http_port, "HTTP"
+            host = core.clean_host(host)
+            ips = [ip for _, ip in core.lan_addresses()] if host == "0.0.0.0" else [host]
+            return "\n".join(f"{tag}   {ip}:{port}" for ip in ips) if ips else L("lan_none")
+
+        addr_labels = {}
+
+        def addr_label(kind):
+            lab = QLabel(addr_text(kind))
+            lab.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+            lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            lab.setStyleSheet(f"font-family:Consolas,monospace;font-size:13px;color:{pal()['primary']};")
+            addr_labels[kind] = lab
+            g.addWidget(lab)
+
+        def refresh_addr(*_):
+            for k, lab in addr_labels.items():
+                lab.setText(addr_text(k))
+
         lay_sw(L("socks_share"), "socks_share")
         if S.socks_share:
-            text(g, L("socks_addr"), "socks_host", "0.0.0.0", host=True)
+            e = text(g, L("socks_addr"), "socks_host", "0.0.0.0", host=True)
+            e.textChanged.connect(refresh_addr)
+            addr_label("socks")
         lay_sw(L("http_share"), "http_share")
         if S.http_share:
-            text(g, L("http_addr"), "http_host", "0.0.0.0", host=True)
+            e = text(g, L("http_addr"), "http_host", "0.0.0.0", host=True)
+            e.textChanged.connect(refresh_addr)
+            addr_label("http")
+        sp_socks.valueChanged.connect(refresh_addr)
+        sp_http.valueChanged.connect(refresh_addr)
         if S.socks_share or S.http_share:
             g.addWidget(label(L("lan_warn"), "err", True))
             g.addWidget(label(L("lan_howto"), "hint", True))
-            seen = []
-            for name, ip in core.lan_addresses():
-                seen.append(f"{name}: {ip}")
-            lan = QLabel("\n".join(seen) if seen else L("lan_none"))
-            lan.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-            lan.setStyleSheet(f"font-family:Consolas,monospace;font-size:12px;color:{pal()['sub']};")
-            g.addWidget(lan)
         v.addStretch()
         QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(keep))
 
@@ -1102,6 +1126,8 @@ class MainWindow(QWidget):
         self._drag = None
         self._qss = None
         self._dirty = set()
+        self._restart = False
+        self._running = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(1, 1, 1, 1)
@@ -1169,8 +1195,13 @@ class MainWindow(QWidget):
 
     def on_status(self, phase, *_):
         self.a_toggle.setText(L("tray_disconnect") if phase != "idle" else L("tray_connect"))
-        if phase in ("idle", "connecting"):
-            self.mark_dirty("settings")  # lock / unlock the option groups (built when opened)
+        running = phase != "idle"
+        if running != self._running:
+            self._running = running
+            self.mark_dirty("settings")  # show / hide the "applies next time" note (built when opened)
+        if phase == "idle" and self._restart:
+            self._restart = False
+            QTimer.singleShot(400, self.toggle)  # "Reconnect now": start again once the old session is gone
 
     def paintEvent(self, _):
         c = pal()
@@ -1225,7 +1256,18 @@ class MainWindow(QWidget):
                 return
             self.ctl.start()
         elif self.ctl.phase != "stopping":
+            self._restart = False   # a manual disconnect cancels a pending "Reconnect now"
             self.ctl.stop()
+
+    def reconnect(self):
+        """Apply changed settings right away: stop the running connection, then connect again."""
+        if self.ctl.phase == "idle":
+            self.toggle()
+        elif self.ctl.phase != "stopping":
+            self._restart = True
+            self.ctl.stop()
+        else:
+            self._restart = True
 
     def show_window(self):
         self.showNormal()

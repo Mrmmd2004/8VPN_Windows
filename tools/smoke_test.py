@@ -42,6 +42,14 @@ for lang in ("en", "fa"):
     sheet.show(); snap(sheet, f"{lang}-region")
     sheet.close()
 
+# Settings while a connection is running: the option groups must stay enabled
+w.ctl.phase = "connected"
+w.mark_dirty("settings"); w.open_settings(); snap(w, "en-settings-running")
+assert all(b.isEnabled() for b in w.settings.findChildren(main.Btn)
+           if b.variant == "chip"), "chips must not be locked while connected"
+w.ctl.phase = "idle"
+w.mark_dirty("settings")
+
 core.S.d.update(language="en", theme="light", route="aether")
 w.refresh(); w.go_home(); snap(w, "light-home")
 print("UI smoke test OK ->", out)

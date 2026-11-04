@@ -21,7 +21,7 @@ from collections import deque
 from PyQt6.QtCore import QObject, pyqtSignal
 
 APP_NAME = "8VPN"
-VERSION = "4.8"
+VERSION = "4.8.1"
 TELEGRAM = "https://t.me/Clubapp8"
 
 NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW
@@ -165,10 +165,7 @@ class Eff:
     (used to alternate HTTP/3 and HTTP/2 after a drop without touching the saved settings)."""
 
     def __init__(self, base):
-        # A copy, so changing a setting while connected cannot move ports under the running session.
-        snap = Settings.__new__(Settings)
-        snap.__dict__["d"] = dict(base.d)
-        self.__dict__["_b"] = snap
+        self.__dict__["_b"] = base
         self.__dict__["_o"] = {}
 
     def over(self, **kw):
@@ -260,7 +257,24 @@ class Settings:
     def mtu_v(self): return max(1280, min(9000, self.mtu))
 
 
+class Snapshot(Settings):
+    """Frozen copy of the settings taken when a connection starts. Editing the settings while connected
+    (or while connecting) changes only the saved values: the running session keeps using this copy."""
+
+    def __init__(self, d):
+        self.d = dict(d)
+
+    def save(self):
+        pass
+
+
 S = Settings()
+_ACTIVE = []  # the Controller (set by Controller.__init__), so the UI can ask which settings are really running
+
+
+def cfg():
+    """Settings of the running connection, or the saved settings when nothing is running."""
+    return _ACTIVE[0].cfg() if _ACTIVE else S
 
 
 # ----------------------------------------------------------- helpers
@@ -861,6 +875,7 @@ class Controller(QObject):
 
     def __init__(self):
         super().__init__()
+        _ACTIVE[:] = [self]
         self.phase = "idle"
         self.logs = deque(maxlen=500)
         self._thread = None
@@ -910,8 +925,12 @@ class Controller(QObject):
             gen = self._gen
             threading.Thread(target=lambda: self._gen == gen and self._teardown(), daemon=True).start()
 
+    def cfg(self):
+        s = self._cur
+        return s if (s is not None and self.phase != "idle") else S
+
     def rescan(self):
-        if self.phase == "connected" and route_of(S).family == "aether":
+        if self.phase == "connected" and route_of(self.cfg()).family == "aether":
             self._rescan.set()
 
     def shutdown(self):
@@ -940,7 +959,7 @@ class Controller(QObject):
         self._stop.wait(sec)
 
     def _run(self):
-        s = Eff(S)
+        s = Eff(Snapshot(S.d))
         self._cur = s
         self._stalls = 0
         LOCAL["host"] = local_of(socks_bind(s))
@@ -1113,11 +1132,13 @@ class Controller(QObject):
             # Psiphon / Tor open their port at once; Aether's SOCKS port opens once WARP is validated.
             # For plain Aether the port can accept connections before the tunnel is validated, so wait
             # for Aether's own "validated" line before showing Connected.
-            if port_open(port) and (port == s.socks_port or port_open(s.socks_port)) \
-                    and (not r.psiphon or self._psiphon_ready or waited > 60) \
-                    and (r.name != "aether" or self._socks_ready or waited > 90):
+            # Cheap flag checks first; the port probe (connect + close) comes last and only once the core
+            # reports it is ready, otherwise Psiphon logs one "accept error: EOF" per probe.
+            if (not r.psiphon or self._psiphon_ready or waited > 60) \
+                    and (r.name != "aether" or self._socks_ready or waited > 90) \
+                    and port_open(port) and (port == s.socks_port or port_open(s.socks_port)):
                 break
-            self._sleep(0.12)
+            self._sleep(0.5 if (r.psiphon or r.tor) and not self._psiphon_ready and waited < 60 else 0.12)
         else:
             return False
         self._log("core is ready")
@@ -1296,6 +1317,8 @@ class Controller(QObject):
                         self._psiphon_ready = True
                     if "socks5 server listening" in line or "tunnel validated" in line:
                         self._socks_ready = True
+                    if "socksPeekByte() failed: EOF" in line:
+                        continue   # a plain port probe closed the connection: not an error
                     if "tryDatastoreOpenDB" in line or "openDataStore" in line:
                         self._datastore_failed = True
                 self._log(("[tun] " if tag == "tun" else "") + line)
