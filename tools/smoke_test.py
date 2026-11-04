@@ -35,7 +35,10 @@ for lang in ("en", "fa"):
     w.refresh()
     snap(w, f"{lang}-home-psiphon-panel")
     w.open_settings(); snap(w, f"{lang}-settings")
-    w.settings.scroll.verticalScrollBar().setValue(900); snap(w, f"{lang}-settings-mid")
+    assert w.settings.section is None, "Settings must open on the list of sections"
+    for key, _t, _i in main.SECTIONS:
+        w.settings.open_section(key); snap(w, f"{lang}-settings-{key}")
+    w.settings.close_section()
     w.open_logs(); snap(w, f"{lang}-logs")
     w.open_about(); snap(w, f"{lang}-about")
     sheet = main.RegionSheet(w, "DE", lambda cc: None)

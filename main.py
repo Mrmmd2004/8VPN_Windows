@@ -684,14 +684,45 @@ class HomePage(QWidget):
             self._log_timer.start(150)
 
 
+SECTIONS = (   # key, title (i18n key), icon
+    ("general", "sec_general", "settings"),
+    ("core", "sec_core", "bolt"),
+    ("routing", "sec_routing", "globe"),
+    ("psiphon", "sec_psiphon", "send"),
+    ("tor", "sec_tor", "lock"),
+    ("advanced", "sec_advanced", "code"),
+    ("lan", "sec_lan", "share"),
+)
+
+
 class SettingsPage(QWidget):
+    """Settings as a list of buttons (General, Aether core, Routing, ...). A tap opens that section on its own page;
+    Clear cache is the last button of the list and works with one tap."""
+
     def __init__(self, win):
         super().__init__()
         self.win, self.ctl = win, win.ctl
         self.root = QVBoxLayout(self)
         self.root.setContentsMargins(16, 0, 8, 10)
         self.scroll = None
+        self.section = None      # None = the list of sections
         self._note = ""
+
+    # ---- navigation
+    def open_section(self, name):
+        self.section = name
+        self._note = ""
+        self.build(reset=True)
+
+    def close_section(self):
+        self.section = None
+        self.build(reset=True)
+
+    def reset(self):
+        """Called when the page is opened from Home: always start on the list."""
+        self.section = None
+        self._note = ""
+        self.scroll = None
 
     def put(self, key, value, rebuild=False):
         S.set(**{key: value})
@@ -703,12 +734,17 @@ class SettingsPage(QWidget):
             self.build()
             self.win.home.refresh()
 
-    def build(self):
-        keep = self.scroll.verticalScrollBar().value() if self.scroll else 0
+    def build(self, reset=False):
+        keep = 0 if (reset or not self.scroll) else self.scroll.verticalScrollBar().value()
         clear_layout(self.root)
         about = IconButton("info", 42, 2.0)
         about.clicked.connect(self.win.open_about)
-        self.root.addLayout(page_header(L("settings"), self.win.go_home, [about]))
+        titles = {k: t for k, t, _ in SECTIONS}
+        if self.section in titles:
+            self.root.addLayout(page_header(L(titles[self.section]), self.close_section, [about]))
+        else:
+            self.section = None
+            self.root.addLayout(page_header(L("settings"), self.win.go_home, [about]))
 
         running = self.ctl.phase != "idle"   # options stay editable; a running connection keeps its own copy
         body = QWidget()
@@ -718,8 +754,7 @@ class SettingsPage(QWidget):
         self.scroll = scrolling(body)
         self.root.addWidget(self.scroll)
 
-        def group(title_key, **_ignored):
-            v.addWidget(SectionTitle(L(title_key)))
+        def new_card():
             fr, lay = card((16, 16, 16, 16), 16)
             v.addWidget(fr)
             return lay
@@ -760,10 +795,10 @@ class SettingsPage(QWidget):
                 lay.addWidget(label(L("endpoint_invalid" if endpoint else "addr_invalid"), "err", True))
             return e
 
-        def action(lay, icon, title, fn, danger=False, enabled=True):
+        def action(lay, icon, title, fn, danger=False, enabled=True, chevron=False):
             b = Btn("", "action")
             b.setStyleSheet("QPushButton#action { padding: 0; }")
-            b.setMinimumHeight(48)
+            b.setMinimumHeight(52 if chevron else 48)
             b.setEnabled(enabled)
             b.clicked.connect(fn)
             h = QHBoxLayout(b)
@@ -772,10 +807,15 @@ class SettingsPage(QWidget):
             ic = Icon(icon, 20, "danger" if danger else "primary", 2.0)
             t = QLabel(title)
             t.setStyleSheet(f"color:{pal()['danger'] if danger else pal()['text']};")
-            for w in (ic, t):
-                w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            parts = [ic, t]
             h.addWidget(ic)
             h.addWidget(t, 1)
+            if chevron:
+                ch = Icon("chev_left" if rtl() else "chev_right", 20)
+                parts.append(ch)
+                h.addWidget(ch)
+            for w in parts:
+                w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             lay.addWidget(b)
 
         if running:
@@ -785,117 +825,138 @@ class SettingsPage(QWidget):
             rc.clicked.connect(self.win.reconnect)
             v.addWidget(rc)
 
-        g = group("sec_general")
-        chips(g, L("language"), "language", [("fa", "فارسی"), ("en", "English")], False)
-        chips(g, L("theme"), "theme", [("dark", L("dark")), ("light", L("light"))], False)
-        chips(g, L("default_mode"), "mode", [("vpn", L("vpn")), ("proxy", L("proxy"))])
-        switch(g, L("autostart"), "autostart")
-        switch(g, L("auto_connect"), "auto_connect")
-        switch(g, L("start_min"), "start_minimized")
-        switch(g, L("close_tray"), "hide_on_close")
-        switch(g, L("keep_awake"), "keep_awake")
-        chips(g, L("split_tunnel"), "split_mode",
-              [("off", L("split_off")), ("include", L("split_include")), ("exclude", L("split_exclude"))])
-        if S.split_mode != "off":
-            text(g, L("split_apps"), "split_apps", L("split_hint"))
-            g.addWidget(label(L("split_note"), "hint", True))
-        g.addWidget(label(L("admin_note"), "hint", True))
+        sec = self.section
+        if sec is None:
+            # ---- the list: one button per section, Clear cache last
+            g = new_card()
+            for key, title_key, icon in SECTIONS:
+                action(g, icon, L(title_key), lambda _=False, k=key: self.open_section(k), chevron=True)
+            g = new_card()
+            action(g, "trash", L("clear_cache"), self.clear_cache, True, not running)
+            if self._note:
+                g.addWidget(label(self._note, "hint", True))
 
-        g = group("sec_core")
-        chips(g, L("protocol"), "protocol", core.PROTOCOLS)
-        chips(g, L("transport"), "carrier", [("h3", "HTTP/3 (QUIC)"), ("h2", "HTTP/2 (TCP)")], False)
-        chips(g, L("scan"), "scan", [(x, x) for x in ("turbo", "balanced", "thorough", "verified", "ironclad")], False)
-        chips(g, L("noize"), "noize", [("default", L("default"))] + [(x, x) for x in ("off", "light", "firewall", "balanced", "gfw", "aggressive")], False)
-        chips(g, L("ipv"), "ip_version", [("4", "IPv4"), ("6", "IPv6"), ("dual", "IPv4 + IPv6")], False)
-        switch(g, L("quick"), "quick_reconnect")
-        switch(g, L("fresh"), "fresh_after_drop")
-        number(g, L("tries"), "max_tries", 1, 999)
-        number(g, L("retry_delay"), "retry_delay_ms", 100, 60000)
-        number(g, L("pingfails"), "ping_fails", 1, 20)
-        number(g, L("ping_interval"), "ping_interval", 1, 60)
-        text(g, L("endpoint"), "endpoint", L("endpoint_hint"), True)
-        text(g, L("endpoint2"), "endpoint2", L("endpoint_hint"), True)
-        text(g, L("upstream"), "upstream", L("upstream_hint"))
+        elif sec == "general":
+            g = new_card()
+            chips(g, L("language"), "language", [("fa", "فارسی"), ("en", "English")], False)
+            chips(g, L("theme"), "theme", [("dark", L("dark")), ("light", L("light"))], False)
+            chips(g, L("default_mode"), "mode", [("vpn", L("vpn")), ("proxy", L("proxy"))])
+            switch(g, L("autostart"), "autostart")
+            switch(g, L("auto_connect"), "auto_connect")
+            switch(g, L("start_min"), "start_minimized")
+            switch(g, L("close_tray"), "hide_on_close")
+            switch(g, L("keep_awake"), "keep_awake")
+            chips(g, L("split_tunnel"), "split_mode",
+                  [("off", L("split_off")), ("include", L("split_include")), ("exclude", L("split_exclude"))])
+            if S.split_mode != "off":
+                text(g, L("split_apps"), "split_apps", L("split_hint"))
+                g.addWidget(label(L("split_note"), "hint", True))
+            g.addWidget(label(L("admin_note"), "hint", True))
 
-        g = group("sec_routing")
-        text(g, L("route_block"), "route_block", L("route_hint"))
-        text(g, L("route_direct"), "route_direct", L("route_hint"))
-        text(g, L("dns"), "dns", "1.1.1.1, 1.0.0.1")
+        elif sec == "core":
+            g = new_card()
+            chips(g, L("protocol"), "protocol", core.PROTOCOLS)
+            chips(g, L("transport"), "carrier", [("h3", "HTTP/3 (QUIC)"), ("h2", "HTTP/2 (TCP)")], False)
+            chips(g, L("scan"), "scan", [(x, x) for x in ("turbo", "balanced", "thorough", "verified", "ironclad")], False)
+            chips(g, L("noize"), "noize", [("default", L("default"))] + [(x, x) for x in ("off", "light", "firewall", "balanced", "gfw", "aggressive")], False)
+            chips(g, L("ipv"), "ip_version", [("4", "IPv4"), ("6", "IPv6"), ("dual", "IPv4 + IPv6")], False)
+            switch(g, L("quick"), "quick_reconnect")
+            switch(g, L("fresh"), "fresh_after_drop")
+            number(g, L("tries"), "max_tries", 1, 999)
+            number(g, L("retry_delay"), "retry_delay_ms", 100, 60000)
+            number(g, L("pingfails"), "ping_fails", 1, 20)
+            number(g, L("ping_interval"), "ping_interval", 1, 60)
+            text(g, L("endpoint"), "endpoint", L("endpoint_hint"), True)
+            text(g, L("endpoint2"), "endpoint2", L("endpoint_hint"), True)
+            text(g, L("upstream"), "upstream", L("upstream_hint"))
 
-        g = group("sec_psiphon")
-        g.addWidget(field(L("region"), RegionRow(lambda: RegionSheet(self.win, S.psiphon_region, lambda cc: self.put("psiphon_region", cc, True)).exec())))
-        chips(g, L("psiphon_mode"), "psiphon_mode", [("auto", L("auto")), ("cdn", "CDN")], False)
+        elif sec == "routing":
+            g = new_card()
+            text(g, L("route_block"), "route_block", L("route_hint"))
+            text(g, L("route_direct"), "route_direct", L("route_hint"))
+            text(g, L("dns"), "dns", "1.1.1.1, 1.0.0.1")
 
-        g = group("sec_tor")
-        chips(g, L("bridges"), "tor_bridges", [("auto", L("auto")), ("always", L("always")), ("never", L("never"))], False)
+        elif sec == "psiphon":
+            g = new_card()
+            g.addWidget(field(L("region"), RegionRow(lambda: RegionSheet(self.win, S.psiphon_region, lambda cc: self.put("psiphon_region", cc, True)).exec())))
+            chips(g, L("psiphon_mode"), "psiphon_mode", [("auto", L("auto")), ("cdn", "CDN")], False)
 
-        g = group("sec_advanced")
-        chips(g, L("perf"), "perf", [(x, x) for x in ("auto", "low", "medium", "high")], False)
-        text(g, L("extra"), "extra_args", L("extra_hint"))
-        number(g, L("mtu"), "mtu", 1280, 9000)
-        chips(g, L("stack"), "tun_stack", [("mixed", "mixed"), ("system", "system"), ("gvisor", "gVisor")], False)
-        action(g, "logs", L("open_logs"), self.win.open_logs)
-        action(g, "trash", L("clear_cache"), self.ask_clear, True, not running)
-        if self._note:
-            g.addWidget(label(self._note, "hint", True))
+        elif sec == "tor":
+            g = new_card()
+            chips(g, L("bridges"), "tor_bridges", [("auto", L("auto")), ("always", L("always")), ("never", L("never"))], False)
 
-        g = group("sec_lan")
-        sp_socks = number(g, L("socks"), "socks_port", 1024, 65535)
-        sp_http = number(g, L("http"), "http_port", 1024, 65535)
-        switch(g, L("http_local"), "http_enabled")
-        switch(g, L("http_proxy"), "system_proxy")
-        switch(g, L("free_ports"), "free_ports")
-        g.addWidget(label(L("ports_note"), "hint", True))
-        lay_sw = lambda title, key: g.addWidget(SwitchRow(title, bool(S.d[key]), lambda val, k=key: self.put(k, bool(val), True)))
+        elif sec == "advanced":
+            g = new_card()
+            chips(g, L("perf"), "perf", [(x, x) for x in ("auto", "low", "medium", "high")], False)
+            text(g, L("extra"), "extra_args", L("extra_hint"))
+            number(g, L("mtu"), "mtu", 1280, 9000)
+            chips(g, L("stack"), "tun_stack", [("mixed", "mixed"), ("system", "system"), ("gvisor", "gVisor")], False)
+            action(g, "logs", L("open_logs"), self.win.open_logs)
 
-        def addr_text(kind):
-            """Where other devices reach this proxy: one 'ip:port' line per network address of this PC."""
-            if kind == "socks":
-                host, port, tag = S.socks_host, core.exit_port(S), "SOCKS5"   # Psiphon / Tor routes use their own port
-            else:
-                host, port, tag = S.http_host, S.http_port, "HTTP"
-            host = core.clean_host(host)
-            ips = [ip for _, ip in core.lan_addresses()] if host == "0.0.0.0" else [host]
-            return "\n".join(f"{tag}   {ip}:{port}" for ip in ips) if ips else L("lan_none")
+        elif sec == "lan":
+            g = new_card()
+            sp_socks = number(g, L("socks"), "socks_port", 1024, 65535)
+            sp_http = number(g, L("http"), "http_port", 1024, 65535)
+            switch(g, L("http_local"), "http_enabled")
+            switch(g, L("http_proxy"), "system_proxy")
+            switch(g, L("free_ports"), "free_ports")
+            g.addWidget(label(L("ports_note"), "hint", True))
+            lay_sw = lambda title, key: g.addWidget(SwitchRow(title, bool(S.d[key]), lambda val, k=key: self.put(k, bool(val), True)))
 
-        addr_labels = {}
+            def addr_text(kind):
+                """Where other devices reach this proxy: one 'ip:port' line per network address of this PC."""
+                if kind == "socks":
+                    host, port, tag = S.socks_host, core.exit_port(S), "SOCKS5"   # Psiphon / Tor routes use their own port
+                else:
+                    host, port, tag = S.http_host, S.http_port, "HTTP"
+                host = core.clean_host(host)
+                ips = [ip for _, ip in core.lan_addresses()] if host == "0.0.0.0" else [host]
+                return "\n".join(f"{tag}   {ip}:{port}" for ip in ips) if ips else L("lan_none")
 
-        def addr_label(kind):
-            lab = QLabel(addr_text(kind))
-            lab.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-            lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            lab.setStyleSheet(f"font-family:Consolas,monospace;font-size:13px;color:{pal()['primary']};")
-            addr_labels[kind] = lab
-            g.addWidget(lab)
+            addr_labels = {}
 
-        def refresh_addr(*_):
-            for k, lab in addr_labels.items():
-                lab.setText(addr_text(k))
+            def addr_label(kind):
+                lab = QLabel(addr_text(kind))
+                lab.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+                lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                lab.setStyleSheet(f"font-family:Consolas,monospace;font-size:13px;color:{pal()['primary']};")
+                addr_labels[kind] = lab
+                g.addWidget(lab)
 
-        lay_sw(L("socks_share"), "socks_share")
-        if S.socks_share:
-            e = text(g, L("socks_addr"), "socks_host", "0.0.0.0", host=True)
-            e.textChanged.connect(refresh_addr)
-            addr_label("socks")
-        lay_sw(L("http_share"), "http_share")
-        if S.http_share:
-            e = text(g, L("http_addr"), "http_host", "0.0.0.0", host=True)
-            e.textChanged.connect(refresh_addr)
-            addr_label("http")
-        sp_socks.valueChanged.connect(refresh_addr)
-        sp_http.valueChanged.connect(refresh_addr)
-        if S.socks_share or S.http_share:
-            g.addWidget(label(L("lan_warn"), "err", True))
-            g.addWidget(label(L("lan_howto"), "hint", True))
+            def refresh_addr(*_):
+                for k, lab in addr_labels.items():
+                    lab.setText(addr_text(k))
+
+            lay_sw(L("socks_share"), "socks_share")
+            if S.socks_share:
+                e = text(g, L("socks_addr"), "socks_host", "0.0.0.0", host=True)
+                e.textChanged.connect(refresh_addr)
+                addr_label("socks")
+            lay_sw(L("http_share"), "http_share")
+            if S.http_share:
+                e = text(g, L("http_addr"), "http_host", "0.0.0.0", host=True)
+                e.textChanged.connect(refresh_addr)
+                addr_label("http")
+            sp_socks.valueChanged.connect(refresh_addr)
+            sp_http.valueChanged.connect(refresh_addr)
+            if S.socks_share or S.http_share:
+                g.addWidget(label(L("lan_warn"), "err", True))
+                g.addWidget(label(L("lan_howto"), "hint", True))
+
         v.addStretch()
         QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(keep))
 
-    def ask_clear(self):
-        ConfirmSheet(self.win, L("clear_cache"), L("clear_cache_warn"), L("confirm"), self.clear_cache).exec()
-
     def clear_cache(self):
+        """One tap: deletes the saved Aether / Psiphon / Tor / sing-box data (the settings stay)."""
+        if self.ctl.phase != "idle":
+            return
         for sub in ("aether", "singbox"):
             shutil.rmtree(os.path.join(core.DATA_DIR, sub), ignore_errors=True)
+        for f in ("singbox.json",):
+            try:
+                os.remove(os.path.join(core.DATA_DIR, f))
+            except OSError:
+                pass
         self._note = L("cache_cleared")
         self.build()
 
@@ -1227,6 +1288,8 @@ class MainWindow(QWidget):
     # ---- navigation
     def go_home(self): self.stack.setCurrentWidget(self.home)
     def open_settings(self):
+        self.settings.reset()
+        self._dirty.add("settings")
         self._build("settings")
         self.stack.setCurrentWidget(self.settings)
 
@@ -1278,8 +1341,9 @@ class MainWindow(QWidget):
         self.hide() if self.isVisible() else self.show_window()
 
     def quit_app(self):
+        self.hide()            # the window disappears at once; the cores are stopped right after
         self.tray.hide()
-        self.ctl.shutdown()
+        self.ctl.shutdown()    # runs once; the later calls (aboutToQuit, main) return immediately
         core.restore_system_proxy()
         QApplication.quit()
 

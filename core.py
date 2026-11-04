@@ -21,7 +21,7 @@ from collections import deque
 from PyQt6.QtCore import QObject, pyqtSignal
 
 APP_NAME = "8VPN"
-VERSION = "4.8.1"
+VERSION = "4.8"
 TELEGRAM = "https://t.me/Clubapp8"
 
 NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW
@@ -397,16 +397,50 @@ def free_port(port: int, log=print) -> bool:
     return False
 
 
-def kill_leftovers(log=print):
-    """Close cores left behind by a crashed or force-closed earlier session."""
-    for name in ("aether.exe", "sing-box.exe", "psiphon-tunnel-core.exe", "lyrebird.exe"):
-        try:
-            r = subprocess.run(["taskkill", "/F", "/T", "/IM", name], creationflags=NO_WINDOW,
-                               capture_output=True, timeout=15)
-            if r.returncode == 0:
-                log(f"closed leftover {name}")
-        except Exception:
-            pass
+CORE_PROCS = ("aether.exe", "sing-box.exe", "psiphon-tunnel-core.exe", "lyrebird.exe")
+HELPER_PROCS = ("aether.exe", "psiphon-tunnel-core.exe", "lyrebird.exe")   # everything except the TUN
+
+
+def kill_leftovers(log=print, names=CORE_PROCS):
+    """Close cores left behind by a crashed or force-closed earlier session.
+    Uses psutil (no helper process is started, so it takes milliseconds); taskkill is only the fallback."""
+    want = {n.lower() for n in names}
+    try:
+        import psutil
+        me = os.getpid()
+        procs = []
+        for p in psutil.process_iter(["name"]):
+            if p.pid != me and (p.info.get("name") or "").lower() in want:
+                procs.append(p)
+        victims = list(procs)
+        for p in procs:
+            try:
+                victims += p.children(recursive=True)
+            except Exception:
+                pass
+        for p in victims:
+            try:
+                p.kill()
+            except Exception:
+                pass
+        if victims:
+            psutil.wait_procs(victims, timeout=1.5)
+        for p in procs:
+            log(f"closed leftover {p.info.get('name')}")
+        return
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    if not IS_WIN:
+        return
+    cmd = ["taskkill", "/F", "/T"]
+    for n in names:
+        cmd += ["/IM", n]
+    try:
+        subprocess.run(cmd, creationflags=NO_WINDOW, capture_output=True, timeout=15)
+    except Exception:
+        pass
 
 
 def is_admin() -> bool:
@@ -819,12 +853,13 @@ def singbox_config(s, stack=None) -> dict:
     addr = ["172.19.0.1/30"] + (["fdfe:dcba:9876::1/126"] if v6 else [])
     dns_server = (csv(s.dns).split(",")[0] if s.dns.strip() else "") or "1.1.1.1"
     # Everything that runs from the core folder (aether, psiphon, lyrebird, ...) must leave directly.
-    direct_rule = {"process_path_regex": ["(?i)^" + re.escape(CORE_DIR) + r"\\.*"],
-                   "process_name": ["aether.exe", "sing-box.exe", "psiphon-tunnel-core.exe", "lyrebird.exe"],
-                   "outbound": "direct"}
+    # Two separate rules on purpose: fields of one rule are AND-ed, so a single rule would stop matching when
+    # either the path or the name differs (case, 8.3 names, a renamed helper) and the core's own traffic would
+    # loop back into the TUN. This way a match on the program name OR on its folder is enough.
     rules = [
         {"action": "sniff"},
-        direct_rule,
+        {"process_name": list(CORE_PROCS), "outbound": "direct"},
+        {"process_path_regex": ["(?i)^" + re.escape(CORE_DIR) + r"\\.*"], "outbound": "direct"},
     ]
     apps = split_names(s.split_apps)
     if apps and s.split_mode == "exclude":
@@ -899,6 +934,8 @@ class Controller(QObject):
         self._connected_at = 0.0
         self._last_rx_at = 0.0           # last time data arrived for the apps (VPN mode)
         self._rx_bps = 0.0
+        self._closing = False            # shutdown() already ran (it is called from several places on exit)
+        self._core_busy = False          # the core is being restarted on purpose: not a crash
 
     # ---- public
     @property
@@ -934,13 +971,15 @@ class Controller(QObject):
             self._rescan.set()
 
     def shutdown(self):
-        """Blocking stop for application exit."""
+        """Blocking stop for application exit. Runs once: quit_app, aboutToQuit and main() all call it."""
+        if self._closing:
+            return
+        self._closing = True
         self._stop.set()
         t = self._thread
         self._teardown()
         if t and t.is_alive():
-            t.join(8)
-        self._teardown()
+            t.join(1.0)   # the worker only has to notice the stop flag; the cores are already gone
 
     # ---- internals
     def _set(self, phase, attempt=0, tries=0):
@@ -1109,10 +1148,32 @@ class Controller(QObject):
         self._datastore_failed = False
 
         # 1) Aether
+        if not self._launch_core(s, fresh):
+            return False
+        self._log("core is ready")
+
+        # 2) mode specific part
+        if vpn:
+            if self.is_paused:   # paused by the user: the core comes back, the adapter stays off
+                return True
+            return self._start_tun(s) and self._after_tun(s)
+        if s.system_proxy:
+            addr = f"{local_of(http_bind(s))}:{s.http_port}"
+            set_system_proxy(addr)
+            self._proxy_on = True
+            self._log(f"system proxy set to {addr}")
+        return True
+
+    def _launch_core(self, s, fresh: bool) -> bool:
+        """Starts aether.exe and waits until the exit port really carries data."""
+        r = route_of(s)
         args = aether_args(s, fresh, self._psi_slot)
         os.makedirs(os.path.join(DATA_DIR, "aether"), exist_ok=True)
         if r.psiphon:
             clean_psiphon_dirs(self._psi_slot)  # a failed earlier slot may be broken or locked
+        self._psiphon_ready = False
+        self._socks_ready = False
+        self._datastore_failed = False
         self._log("exec: aether " + " ".join(args))
         self._aether = subprocess.Popen(
             [AETHER_EXE] + args, cwd=os.path.join(DATA_DIR, "aether"),
@@ -1123,6 +1184,7 @@ class Controller(QObject):
         limit = 720 if r.tor else 420 if r.psiphon else 300
         port = exit_port(s)
         t0 = time.time()
+        opened = False
         while not self._stop.is_set() and time.time() - t0 < limit:
             if self._aether is None or self._aether.poll() is not None:
                 code = self._aether.returncode if self._aether else "?"
@@ -1134,26 +1196,52 @@ class Controller(QObject):
             # for Aether's own "validated" line before showing Connected.
             # Cheap flag checks first; the port probe (connect + close) comes last and only once the core
             # reports it is ready, otherwise Psiphon logs one "accept error: EOF" per probe.
-            if (not r.psiphon or self._psiphon_ready or waited > 60) \
-                    and (r.name != "aether" or self._socks_ready or waited > 90) \
-                    and port_open(port) and (port == s.socks_port or port_open(s.socks_port)):
-                break
+            if not opened:
+                if (not r.psiphon or self._psiphon_ready or waited > 60) \
+                        and (r.name != "aether" or self._socks_ready or waited > 90) \
+                        and port_open(port) and (port == s.socks_port or port_open(s.socks_port)):
+                    opened = True
+                    if r.slow:
+                        self._log("core is up, checking that data really flows")
+            if opened:
+                if not r.slow:
+                    return True
+                # Psiphon / Tor open their SOCKS port before their tunnel carries anything, and a Psiphon
+                # tunnel can die right after "ready". Do not say Connected before a real request got through.
+                if socks_get(port, "cp.cloudflare.com", "/generate_204", 10) \
+                        or socks_get(port, "www.gstatic.com", "/generate_204", 10):
+                    return True
+                self._sleep(1.0)
+                continue
             self._sleep(0.5 if (r.psiphon or r.tor) and not self._psiphon_ready and waited < 60 else 0.12)
-        else:
-            return False
-        self._log("core is ready")
+        return False
 
-        # 2) mode specific part
-        if vpn:
-            if self.is_paused:   # paused by the user: the core comes back, the adapter stays off
-                return True
-            return self._start_tun(s)
-        if s.system_proxy:
-            addr = f"{local_of(http_bind(s))}:{s.http_port}"
-            set_system_proxy(addr)
-            self._proxy_on = True
-            self._log(f"system proxy set to {addr}")
-        return True
+    def _after_tun(self, s) -> bool:
+        """Psiphon without a tunnel underneath opens its connections BEFORE the TUN exists. Windows then
+        pulls those running connections into the new adapter, where sing-box has never seen their start,
+        and they die silently (Connected, but no ping and no data). So once the adapter is up, the core
+        is started again: Psiphon's new connections are made with the TUN in place and leave directly."""
+        if route_of(s).family != "psiphon":
+            return True
+        return self._restart_core(s)
+
+    def _restart_core(self, s) -> bool:
+        """Restarts only aether / Psiphon (the TUN stays up)."""
+        self._core_busy = True
+        try:
+            self._log("restarting the core under the TUN so its connections do not break")
+            p, self._aether = self._aether, None
+            if p is not None:
+                self._kill(p)
+            kill_leftovers(lambda m: None, HELPER_PROCS)
+            ports = {s.socks_port, exit_port(s)}
+            for _ in range(20):
+                if not any(port_open(x) for x in ports):
+                    break
+                self._sleep(0.15)
+            return not self._stop.is_set() and self._launch_core(s, False)
+        finally:
+            self._core_busy = False
 
     def _start_tun(self, s) -> bool:
         """Starts sing-box on a Wintun adapter. The configured stack is tried first and gVisor (slower but
@@ -1249,7 +1337,7 @@ class Controller(QObject):
                 return
             self._tun_busy = True
             try:
-                ok = self._start_tun(self._cur)
+                ok = self._start_tun(self._cur) and self._after_tun(self._cur)
             finally:
                 self._tun_busy = False
         if ok:
@@ -1274,7 +1362,7 @@ class Controller(QObject):
             self._tun_busy = True
             try:
                 self._stop_tun()
-                return self._start_tun(self._cur)
+                return self._start_tun(self._cur) and self._after_tun(self._cur)
             finally:
                 self._tun_busy = False
 
@@ -1386,7 +1474,9 @@ class Controller(QObject):
                 rx, tx = max(cur[0] - last[0], 0) / dt, max(cur[1] - last[1], 0) / dt
                 self._rx_bps = rx
                 self.traffic.emit(rx, tx)
-                if rx > 0:
+                # Only real traffic counts. A dead tunnel still produces a trickle (SYN-ACKs from the local
+                # stack, refused QUIC), and that must not make the monitor think the link is alive.
+                if rx >= 3000:
                     self._last_rx_at = now
                 if rx > 0 or self.is_paused or self._tun_busy or self.phase != "connected":
                     stall_since, stall_ticks, stall_tx = 0.0, 0, 0.0
@@ -1419,6 +1509,8 @@ class Controller(QObject):
             stop_ev.wait(3)
 
     def _core_dead(self, s) -> str:
+        if self._core_busy:
+            return ""
         if self._aether is None or self._aether.poll() is not None:
             return "r_core"
         if s.mode == "vpn" and not self.is_paused and not self._tun_busy \
@@ -1436,10 +1528,10 @@ class Controller(QObject):
         20 s proves the link is alive. Dropping a working link is worse than waiting a little longer:
         every drop restarts the core and throws the gateway away."""
         slow = route_of(s).slow
-        timeout = 25 if slow else 8
-        limit = max(s.ping_limit(), 5) if slow else s.ping_limit()
-        every = max(s.ping_every(), 8) if slow else s.ping_every()
-        alive_window = 20.0 if slow else 0.0
+        timeout = 12 if slow else 8
+        limit = max(s.ping_limit(), 4) if slow else s.ping_limit()
+        every = max(s.ping_every(), 5) if slow else s.ping_every()
+        alive_window = 15.0 if slow else 0.0
         fails = 0
         xp = exit_port(s)
         while not self._stop.is_set():
@@ -1462,7 +1554,7 @@ class Controller(QObject):
                 self._net_changed.clear()
                 return "network"
             now = time.time()
-            recent = self._rx_bps > 0 or (alive_window > 0 and now - self._last_rx_at < alive_window)
+            recent = self._rx_bps >= 3000 or (alive_window > 0 and now - self._last_rx_at < alive_window)
             if r:
                 fails = 0
                 self.ping.emit(r[0])
@@ -1488,31 +1580,42 @@ class Controller(QObject):
     def _teardown(self):
         with self._td_lock:
             # TUN first (removes the routes), then the core, then the system proxy.
+            had = False
             for attr in ("_singbox", "_aether"):
                 p = getattr(self, attr)
                 setattr(self, attr, None)
                 if p is not None:
+                    had = True
                     self._kill(p)
             if self._proxy_on:
                 restore_system_proxy()
                 self._proxy_on = False
-            if IS_WIN:  # Psiphon/Tor helpers can outlive aether.exe and keep ports busy
+            if IS_WIN and had:  # Psiphon/Tor helpers can outlive aether.exe and keep ports busy
                 kill_leftovers(lambda m: None)
 
     @staticmethod
     def _kill(p):
+        """Ends a core and everything it started, at once (TerminateProcess; no 2.5 s grace period)."""
         try:
-            if p.poll() is None:
-                p.terminate()
+            if p.poll() is not None:
+                return
+            kids = []
+            try:
+                import psutil
+                kids = psutil.Process(p.pid).children(recursive=True)
+            except Exception:
+                pass
+            p.kill()
+            for k in kids:
                 try:
-                    p.wait(2.5)
-                except subprocess.TimeoutExpired:
+                    k.kill()
+                except Exception:
                     pass
-            if p.poll() is None:
+            try:
+                p.wait(2)
+            except subprocess.TimeoutExpired:
                 if IS_WIN:
                     subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
-                                   creationflags=NO_WINDOW, capture_output=True)
-                else:
-                    p.kill()
+                                   creationflags=NO_WINDOW, capture_output=True, timeout=10)
         except Exception:
             pass
