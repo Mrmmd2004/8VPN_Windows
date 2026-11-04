@@ -34,10 +34,8 @@ for lang in ("en", "fa"):
     w.home._panel_open = True
     w.refresh()
     snap(w, f"{lang}-home-psiphon-panel")
-    w.open_settings(); snap(w, f"{lang}-settings")          # every section closed
-    w.settings.toggle("general"); snap(w, f"{lang}-settings-general")
-    w.settings.toggle("core"); snap(w, f"{lang}-settings-core")
-    w.settings.toggle("core")                                 # close it again
+    w.open_settings(); snap(w, f"{lang}-settings")
+    w.settings.scroll.verticalScrollBar().setValue(900); snap(w, f"{lang}-settings-mid")
     w.open_logs(); snap(w, f"{lang}-logs")
     w.open_about(); snap(w, f"{lang}-about")
     sheet = main.RegionSheet(w, "DE", lambda cc: None)

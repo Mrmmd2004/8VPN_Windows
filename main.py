@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QLineEdi
 
 import core
 from core import S, TELEGRAM, VERSION, Controller
-from ui_kit import (L, Btn, Card, Chips, ClickCard, ConnectButton, Dot, Icon, IconButton, LogoMark, SectionHeader,
+from ui_kit import (L, Btn, Card, Chips, ClickCard, ConnectButton, Dot, Icon, IconButton, LogoMark, SectionTitle,
                     Segmented, Sheet, SwitchRow, Tile, flag_pixmap, fmt_rate, paint_icon, pal, qss, rtl)
 
 GITHUB = "https://github.com/Mrmmd2004/8VPN_Windows"
@@ -451,7 +451,8 @@ class HomePage(QWidget):
             self.status.setStyleSheet(f"color:{color};font-size:15px;font-weight:600;")
         self.status.setText(L("vpn_paused") if paused else L(ph))
         self.btn.set_phase(ph)
-        show_proxy = S.mode == "proxy" or S.socks_share or S.http_enabled
+        ss = self.session()
+        show_proxy = ss.mode == "proxy" or ss.socks_share or core.http_on(ss)
         self.proxy_card.setVisible(show_proxy)
         if show_proxy:
             self.proxy_lbl.setText(self.proxy_text())
@@ -535,6 +536,7 @@ class HomePage(QWidget):
 
     def proxy_text(self):
         """Where other programs (and, when shared, other devices) reach the proxy."""
+        S = self.session()   # while connected: what the running session really uses
         port = core.exit_port(S)   # with Aether -> Psiphon / Tor the usable SOCKS5 port is theirs
         http = core.http_on(S)
         out = [L("proxy_info", a=f"{core.local_of(core.socks_bind(S))}:{port}") +
@@ -560,6 +562,10 @@ class HomePage(QWidget):
             if S.http_share and http:
                 shared(S.http_host, http_p=S.http_port)
         return "\n".join(out)
+
+    def session(self):
+        cur = self.ctl._cur
+        return cur if (cur is not None and self.ctl.phase != "idle") else S
 
     def toggle_pause(self):
         if self.ctl.phase != "connected":
@@ -626,7 +632,7 @@ class HomePage(QWidget):
             return
         self._testing = True
         self.b_test.setText(L("ping_testing"))
-        port = core.exit_port(S)
+        port = core.exit_port(self.session())
 
         def work():
             r = core.socks_get(port, "cp.cloudflare.com", "/generate_204", 8)
@@ -688,10 +694,12 @@ class SettingsPage(QWidget):
         self.root.setContentsMargins(16, 0, 8, 10)
         self.scroll = None
         self._note = ""
-        self._open = None   # key of the section that is open (all sections start closed)
 
     def put(self, key, value, rebuild=False):
         S.set(**{key: value})
+        if key in ("http_enabled", "system_proxy", "socks_share", "http_share", "socks_host", "http_host",
+                   "socks_port", "http_port"):
+            self.win.home.update_all()
         if key == "autostart":
             core.set_autostart(bool(value))
         if key in ("language", "theme"):
@@ -700,12 +708,7 @@ class SettingsPage(QWidget):
             self.build()
             self.win.home.refresh()
 
-    def toggle(self, key):
-        """Section button: open it (closing the one that was open) or close it again."""
-        self._open = None if self._open == key else key
-        self.build(focus=self._open)
-
-    def build(self, focus=None):
+    def build(self):
         keep = self.scroll.verticalScrollBar().value() if self.scroll else 0
         clear_layout(self.root)
         about = IconButton("info", 42, 2.0)
@@ -720,8 +723,16 @@ class SettingsPage(QWidget):
         self.scroll = scrolling(body)
         self.root.addWidget(self.scroll)
 
+        def group(title_key, *, lock=False):
+            v.addWidget(SectionTitle(L(title_key)))
+            fr, lay = card((16, 16, 16, 16), 16)
+            v.addWidget(fr)
+            fr.setEnabled(not (lock and locked))
+            return lay
+
         def chips(lay, title, key, items, rebuild=True):
-            lay.addWidget(field(title, Chips(items, S.d[key], lambda x, k=key: self.put(k, x, rebuild))))
+            # a chip does not repaint itself: the page is rebuilt so the picked one is shown (scroll position is kept)
+            lay.addWidget(field(title, Chips(items, S.d[key], lambda x, k=key: self.put(k, x, True))))
 
         def switch(lay, title, key):
             lay.addWidget(SwitchRow(title, bool(S.d[key]), lambda val, k=key: self.put(k, bool(val))))
@@ -771,119 +782,89 @@ class SettingsPage(QWidget):
             h.addWidget(t, 1)
             lay.addWidget(b)
 
-        # ---- the options of each section (built only while that section is open)
-        def sec_general(g):
-            chips(g, L("language"), "language", [("fa", "فارسی"), ("en", "English")], False)
-            chips(g, L("theme"), "theme", [("dark", L("dark")), ("light", L("light"))], False)
-            chips(g, L("default_mode"), "mode", [("vpn", L("vpn")), ("proxy", L("proxy"))])
-            switch(g, L("autostart"), "autostart")
-            switch(g, L("auto_connect"), "auto_connect")
-            switch(g, L("start_min"), "start_minimized")
-            switch(g, L("close_tray"), "hide_on_close")
-            switch(g, L("keep_awake"), "keep_awake")
-            chips(g, L("split_tunnel"), "split_mode",
-                  [("off", L("split_off")), ("include", L("split_include")), ("exclude", L("split_exclude"))])
-            if S.split_mode != "off":
-                text(g, L("split_apps"), "split_apps", L("split_hint"))
-                g.addWidget(label(L("split_note"), "hint", True))
-            g.addWidget(label(L("admin_note"), "hint", True))
-
-        def sec_core(g):
-            chips(g, L("protocol"), "protocol", core.PROTOCOLS)
-            chips(g, L("transport"), "carrier", [("h3", "HTTP/3 (QUIC)"), ("h2", "HTTP/2 (TCP)")], False)
-            chips(g, L("scan"), "scan", [(x, x) for x in ("turbo", "balanced", "thorough", "verified", "ironclad")], False)
-            chips(g, L("noize"), "noize", [("default", L("default"))] + [(x, x) for x in ("off", "light", "firewall", "balanced", "gfw", "aggressive")], False)
-            chips(g, L("ipv"), "ip_version", [("4", "IPv4"), ("6", "IPv6"), ("dual", "IPv4 + IPv6")], False)
-            switch(g, L("quick"), "quick_reconnect")
-            switch(g, L("fresh"), "fresh_after_drop")
-            number(g, L("tries"), "max_tries", 1, 999)
-            number(g, L("retry_delay"), "retry_delay_ms", 100, 60000)
-            number(g, L("pingfails"), "ping_fails", 1, 20)
-            number(g, L("ping_interval"), "ping_interval", 1, 60)
-            text(g, L("endpoint"), "endpoint", L("endpoint_hint"), True)
-            text(g, L("endpoint2"), "endpoint2", L("endpoint_hint"), True)
-            text(g, L("upstream"), "upstream", L("upstream_hint"))
-
-        def sec_routing(g):
-            text(g, L("route_block"), "route_block", L("route_hint"))
-            text(g, L("route_direct"), "route_direct", L("route_hint"))
-            text(g, L("dns"), "dns", "1.1.1.1, 1.0.0.1")
-
-        def sec_psiphon(g):
-            g.addWidget(field(L("region"), RegionRow(lambda: RegionSheet(self.win, S.psiphon_region, lambda cc: self.put("psiphon_region", cc, True)).exec())))
-            chips(g, L("psiphon_mode"), "psiphon_mode", [("auto", L("auto")), ("cdn", "CDN")], False)
-
-        def sec_tor(g):
-            chips(g, L("bridges"), "tor_bridges", [("auto", L("auto")), ("always", L("always")), ("never", L("never"))], False)
-
-        def sec_advanced(g):
-            chips(g, L("perf"), "perf", [(x, x) for x in ("auto", "low", "medium", "high")], False)
-            text(g, L("extra"), "extra_args", L("extra_hint"))
-            number(g, L("mtu"), "mtu", 1280, 9000)
-            chips(g, L("stack"), "tun_stack", [("mixed", "mixed"), ("system", "system"), ("gvisor", "gVisor")], False)
-            action(g, "logs", L("open_logs"), self.win.open_logs)
-            action(g, "trash", L("clear_cache"), self.ask_clear, True, not locked)
-            if self._note:
-                g.addWidget(label(self._note, "hint", True))
-
-        def sec_lan(g):
-            number(g, L("socks"), "socks_port", 1024, 65535)
-            number(g, L("http"), "http_port", 1024, 65535)
-            switch(g, L("http_local"), "http_enabled")
-            switch(g, L("http_proxy"), "system_proxy")
-            switch(g, L("free_ports"), "free_ports")
-            g.addWidget(label(L("ports_note"), "hint", True))
-            lay_sw = lambda title, key: g.addWidget(SwitchRow(title, bool(S.d[key]), lambda val, k=key: self.put(k, bool(val), True)))
-            lay_sw(L("socks_share"), "socks_share")
-            if S.socks_share:
-                text(g, L("socks_addr"), "socks_host", "0.0.0.0", host=True)
-            lay_sw(L("http_share"), "http_share")
-            if S.http_share:
-                text(g, L("http_addr"), "http_host", "0.0.0.0", host=True)
-            if S.socks_share or S.http_share:
-                g.addWidget(label(L("lan_warn"), "err", True))
-                g.addWidget(label(L("lan_howto"), "hint", True))
-                seen = []
-                for name, ip in core.lan_addresses():
-                    seen.append(f"{name}: {ip}")
-                lan = QLabel("\n".join(seen) if seen else L("lan_none"))
-                lan.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-                lan.setStyleSheet(f"font-family:Consolas,monospace;font-size:12px;color:{pal()['sub']};")
-                g.addWidget(lan)
-
-        # key, title, icon, locked while connected, builder
-        sections = (
-            ("general", "sec_general", "settings", False, sec_general),
-            ("core", "sec_core", "bolt", True, sec_core),
-            ("routing", "sec_routing", "globe", True, sec_routing),
-            ("psiphon", "sec_psiphon", "send", True, sec_psiphon),
-            ("tor", "sec_tor", "lock", True, sec_tor),
-            ("advanced", "sec_advanced", "code", True, sec_advanced),
-            ("lan", "sec_lan", "share", True, sec_lan),
-        )
         if locked:
             v.addWidget(banner(L("locked_hint")))
-        anchor = None
-        for key, title_key, icon, lock, fill in sections:
-            is_open = self._open == key
-            hdr = SectionHeader(icon, L(title_key), is_open, lambda k=key: self.toggle(k))
-            v.addWidget(hdr)
-            if is_open:
-                anchor = hdr
-                fr, lay = card((16, 16, 16, 16), 16)
-                fr.setEnabled(not (lock and locked))   # the header stays usable: options can be read while connected
-                fill(lay)
-                v.addWidget(fr)
-        v.addStretch()
 
-        def place():
-            try:
-                bar = self.scroll.verticalScrollBar()
-                bar.setValue(max(0, anchor.y() - 4) if focus and anchor is not None else keep)
-            except RuntimeError:   # the page was rebuilt again before this ran
-                pass
-        v.activate()
-        QTimer.singleShot(0, place)
+        g = group("sec_general")
+        chips(g, L("language"), "language", [("fa", "فارسی"), ("en", "English")], False)
+        chips(g, L("theme"), "theme", [("dark", L("dark")), ("light", L("light"))], False)
+        chips(g, L("default_mode"), "mode", [("vpn", L("vpn")), ("proxy", L("proxy"))])
+        switch(g, L("autostart"), "autostart")
+        switch(g, L("auto_connect"), "auto_connect")
+        switch(g, L("start_min"), "start_minimized")
+        switch(g, L("close_tray"), "hide_on_close")
+        switch(g, L("keep_awake"), "keep_awake")
+        chips(g, L("split_tunnel"), "split_mode",
+              [("off", L("split_off")), ("include", L("split_include")), ("exclude", L("split_exclude"))])
+        if S.split_mode != "off":
+            text(g, L("split_apps"), "split_apps", L("split_hint"))
+            g.addWidget(label(L("split_note"), "hint", True))
+        g.addWidget(label(L("admin_note"), "hint", True))
+
+        g = group("sec_core", lock=True)
+        chips(g, L("protocol"), "protocol", core.PROTOCOLS)
+        chips(g, L("transport"), "carrier", [("h3", "HTTP/3 (QUIC)"), ("h2", "HTTP/2 (TCP)")], False)
+        chips(g, L("scan"), "scan", [(x, x) for x in ("turbo", "balanced", "thorough", "verified", "ironclad")], False)
+        chips(g, L("noize"), "noize", [("default", L("default"))] + [(x, x) for x in ("off", "light", "firewall", "balanced", "gfw", "aggressive")], False)
+        chips(g, L("ipv"), "ip_version", [("4", "IPv4"), ("6", "IPv6"), ("dual", "IPv4 + IPv6")], False)
+        switch(g, L("quick"), "quick_reconnect")
+        switch(g, L("fresh"), "fresh_after_drop")
+        number(g, L("tries"), "max_tries", 1, 999)
+        number(g, L("retry_delay"), "retry_delay_ms", 100, 60000)
+        number(g, L("pingfails"), "ping_fails", 1, 20)
+        number(g, L("ping_interval"), "ping_interval", 1, 60)
+        text(g, L("endpoint"), "endpoint", L("endpoint_hint"), True)
+        text(g, L("endpoint2"), "endpoint2", L("endpoint_hint"), True)
+        text(g, L("upstream"), "upstream", L("upstream_hint"))
+
+        g = group("sec_routing", lock=True)
+        text(g, L("route_block"), "route_block", L("route_hint"))
+        text(g, L("route_direct"), "route_direct", L("route_hint"))
+        text(g, L("dns"), "dns", "1.1.1.1, 1.0.0.1")
+
+        g = group("sec_psiphon", lock=True)
+        g.addWidget(field(L("region"), RegionRow(lambda: RegionSheet(self.win, S.psiphon_region, lambda cc: self.put("psiphon_region", cc, True)).exec())))
+        chips(g, L("psiphon_mode"), "psiphon_mode", [("auto", L("auto")), ("cdn", "CDN")], False)
+
+        g = group("sec_tor", lock=True)
+        chips(g, L("bridges"), "tor_bridges", [("auto", L("auto")), ("always", L("always")), ("never", L("never"))], False)
+
+        g = group("sec_advanced", lock=True)
+        chips(g, L("perf"), "perf", [(x, x) for x in ("auto", "low", "medium", "high")], False)
+        text(g, L("extra"), "extra_args", L("extra_hint"))
+        number(g, L("mtu"), "mtu", 1280, 9000)
+        chips(g, L("stack"), "tun_stack", [("mixed", "mixed"), ("system", "system"), ("gvisor", "gVisor")], False)
+        action(g, "logs", L("open_logs"), self.win.open_logs)
+        action(g, "trash", L("clear_cache"), self.ask_clear, True, not locked)
+        if self._note:
+            g.addWidget(label(self._note, "hint", True))
+
+        g = group("sec_lan")
+        number(g, L("socks"), "socks_port", 1024, 65535)
+        number(g, L("http"), "http_port", 1024, 65535)
+        switch(g, L("http_local"), "http_enabled")
+        switch(g, L("http_proxy"), "system_proxy")
+        switch(g, L("free_ports"), "free_ports")
+        g.addWidget(label(L("ports_note"), "hint", True))
+        lay_sw = lambda title, key: g.addWidget(SwitchRow(title, bool(S.d[key]), lambda val, k=key: self.put(k, bool(val), True)))
+        lay_sw(L("socks_share"), "socks_share")
+        if S.socks_share:
+            text(g, L("socks_addr"), "socks_host", "0.0.0.0", host=True)
+        lay_sw(L("http_share"), "http_share")
+        if S.http_share:
+            text(g, L("http_addr"), "http_host", "0.0.0.0", host=True)
+        if S.socks_share or S.http_share:
+            g.addWidget(label(L("lan_warn"), "err", True))
+            g.addWidget(label(L("lan_howto"), "hint", True))
+            seen = []
+            for name, ip in core.lan_addresses():
+                seen.append(f"{name}: {ip}")
+            lan = QLabel("\n".join(seen) if seen else L("lan_none"))
+            lan.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+            lan.setStyleSheet(f"font-family:Consolas,monospace;font-size:12px;color:{pal()['sub']};")
+            g.addWidget(lan)
+        v.addStretch()
+        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(keep))
 
     def ask_clear(self):
         ConfirmSheet(self.win, L("clear_cache"), L("clear_cache_warn"), L("confirm"), self.clear_cache).exec()
@@ -1108,22 +1089,9 @@ class AboutPage(QWidget):
 
 
 # ------------------------------------------------------------------ main window
-_APPLIED_QSS = None
-
-
-def apply_style():
-    """Sets the app stylesheet only when it really changed (re-parsing it re-polishes every widget)."""
-    global _APPLIED_QSS
-    sheet = qss()
-    if sheet != _APPLIED_QSS:
-        _APPLIED_QSS = sheet
-        QApplication.instance().setStyleSheet(sheet)
-
-
 class MainWindow(QWidget):
     def __init__(self, ctl: Controller):
         super().__init__()
-        apply_style()   # before the pages are built: they get styled once, as they are created
         self.ctl = ctl
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -1132,6 +1100,7 @@ class MainWindow(QWidget):
         self.icon = QIcon(core.resource("assets", "icon.png"))
         self.setWindowIcon(self.icon)
         self._drag = None
+        self._qss = None
         self._dirty = set()
 
         outer = QVBoxLayout(self)
@@ -1186,7 +1155,10 @@ class MainWindow(QWidget):
             getattr(self, name).build()
 
     def refresh(self):
-        apply_style()
+        sheet = qss()
+        if sheet != self._qss:  # re-parsing the app stylesheet re-polishes every widget: do it only on a real change
+            self._qss = sheet
+            QApplication.instance().setStyleSheet(sheet)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft if rtl() else Qt.LayoutDirection.LeftToRight)
         self.a_show.setText(L("tray_show"))
         self.a_quit.setText(L("tray_quit"))
@@ -1264,7 +1236,6 @@ class MainWindow(QWidget):
         self.hide() if self.isVisible() else self.show_window()
 
     def quit_app(self):
-        self.hide()   # gone right away; the cores are closed after this
         self.tray.hide()
         self.ctl.shutdown()
         core.restore_system_proxy()
@@ -1311,7 +1282,6 @@ def main():
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Mrmmd2004.8VPN")
         except Exception:
             pass
-    core.preload()   # psutil loads in the background while the window is built
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setFont(QFont("Segoe UI", 10))

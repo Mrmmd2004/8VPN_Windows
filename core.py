@@ -111,7 +111,7 @@ DEFAULTS = {
     "split_apps": "",            # comma separated program names, e.g. chrome.exe, telegram.exe
     "schema": 0,
 }
-SCHEMA = 5
+SCHEMA = 4
 
 PROTOCOLS = [
     ("wg", "WireGuard"),
@@ -165,7 +165,10 @@ class Eff:
     (used to alternate HTTP/3 and HTTP/2 after a drop without touching the saved settings)."""
 
     def __init__(self, base):
-        self.__dict__["_b"] = base
+        # A copy, so changing a setting while connected cannot move ports under the running session.
+        snap = Settings.__new__(Settings)
+        snap.__dict__["d"] = dict(base.d)
+        self.__dict__["_b"] = snap
         self.__dict__["_o"] = {}
 
     def over(self, **kw):
@@ -203,8 +206,7 @@ class Settings:
         options are kept.
           3: connection tuning back to the Android 3.8 defaults (MASQUE over HTTP/2, 3 attempts, 3 failed
              pings, fresh scan after a drop)
-          4: TUN stack back to the new default (mixed) - gVisor was the old default and is slower
-          5: protocol and transport back to MASQUE over HTTP/2 (the starting state)"""
+          4: TUN stack back to the new default (mixed) - gVisor was the old default and is slower"""
         d = self.d
         old = d.get("schema", 0)
         if old < SCHEMA:
@@ -214,9 +216,6 @@ class Settings:
                     d[k] = DEFAULTS[k]
             if old < 4:
                 d["tun_stack"] = DEFAULTS["tun_stack"]
-            if old < 5:
-                d["protocol"] = DEFAULTS["protocol"]
-                d["carrier"] = DEFAULTS["carrier"]
             d["schema"] = SCHEMA
             self.save()
 
@@ -384,54 +383,16 @@ def free_port(port: int, log=print) -> bool:
     return False
 
 
-HELPER_EXES = ("aether.exe", "sing-box.exe", "psiphon-tunnel-core.exe", "lyrebird.exe")
-
-
-def preload():
-    """Imports psutil in the background so the first connect and the first disconnect do not wait for it."""
-    def work():
-        try:
-            import psutil  # noqa: F401
-        except Exception:
-            pass
-    threading.Thread(target=work, daemon=True, name="8vpn-preload").start()
-
-
 def kill_leftovers(log=print):
-    """Close cores left behind by a crashed or force-closed earlier session (and the Psiphon / Tor helpers
-    that can outlive aether.exe). One process-table pass; no taskkill process is started unless psutil is missing."""
-    found = None
-    try:
-        import psutil
-        me, found = os.getpid(), []
-        for p in psutil.process_iter(["name"]):
-            nm = (p.info.get("name") or "").lower()
-            if nm in HELPER_EXES and p.pid != me:
-                found.append((nm, p))
-    except Exception:
-        found = None
-    if found is None:   # psutil is not usable: a single taskkill call that lists every name
+    """Close cores left behind by a crashed or force-closed earlier session."""
+    for name in ("aether.exe", "sing-box.exe", "psiphon-tunnel-core.exe", "lyrebird.exe"):
         try:
-            args = ["taskkill", "/F", "/T"] + [x for n in HELPER_EXES for x in ("/IM", n)]
-            r = subprocess.run(args, creationflags=NO_WINDOW, capture_output=True, timeout=15)
+            r = subprocess.run(["taskkill", "/F", "/T", "/IM", name], creationflags=NO_WINDOW,
+                               capture_output=True, timeout=15)
             if r.returncode == 0:
-                log("closed leftover cores")
+                log(f"closed leftover {name}")
         except Exception:
             pass
-        return
-    if not found:
-        return
-    for _, p in found:
-        try:
-            p.kill()
-        except Exception:
-            pass
-    try:
-        psutil.wait_procs([p for _, p in found], timeout=1.0)
-    except Exception:
-        pass
-    for nm, _ in found:
-        log(f"closed leftover {nm}")
 
 
 def is_admin() -> bool:
@@ -923,7 +884,6 @@ class Controller(QObject):
         self._connected_at = 0.0
         self._last_rx_at = 0.0           # last time data arrived for the apps (VPN mode)
         self._rx_bps = 0.0
-        self._down = False               # shutdown() already ran (it is called from several exit paths)
 
     # ---- public
     @property
@@ -934,7 +894,6 @@ class Controller(QObject):
         if self.running:
             return
         self._gen += 1
-        self._down = False
         self._stop.clear()
         self._rescan.clear()
         self._net_changed.clear()
@@ -956,15 +915,12 @@ class Controller(QObject):
             self._rescan.set()
 
     def shutdown(self):
-        """Blocking stop for application exit. Safe to call again: only the first call does the work."""
-        if self._down:
-            return
-        self._down = True
+        """Blocking stop for application exit."""
         self._stop.set()
         t = self._thread
         self._teardown()
-        if t and t.is_alive() and t is not threading.current_thread():
-            t.join(3)
+        if t and t.is_alive():
+            t.join(8)
         self._teardown()
 
     # ---- internals
@@ -1501,7 +1457,7 @@ class Controller(QObject):
             end = time.time() + every
             while time.time() < end and not self._stop.is_set() and not self._rescan.is_set() \
                     and not self._net_changed.is_set():
-                self._stop.wait(0.25)   # wakes up immediately when Stop is pressed
+                time.sleep(0.5)
                 if self._core_dead(s):
                     break
         return "stopped"
@@ -1509,52 +1465,31 @@ class Controller(QObject):
     def _teardown(self):
         with self._td_lock:
             # TUN first (removes the routes), then the core, then the system proxy.
-            procs = []
             for attr in ("_singbox", "_aether"):
                 p = getattr(self, attr)
                 setattr(self, attr, None)
                 if p is not None:
-                    procs.append(p)
-            if procs:
-                self._kill_all(procs)
+                    self._kill(p)
             if self._proxy_on:
                 restore_system_proxy()
                 self._proxy_on = False
-            if IS_WIN and procs:  # Psiphon/Tor helpers can outlive aether.exe and keep ports busy
+            if IS_WIN:  # Psiphon/Tor helpers can outlive aether.exe and keep ports busy
                 kill_leftovers(lambda m: None)
 
     @staticmethod
-    def _kill_all(procs):
-        """Ends the processes together: terminate them all first (TerminateProcess on Windows is immediate),
-        then wait at most one second in total and force-kill whatever is left with a single taskkill call."""
-        live = []
-        for p in procs:
-            try:
-                if p.poll() is None:
-                    p.terminate()
-                    live.append(p)
-            except Exception:
-                pass
-        end = time.time() + 1.0
-        for p in live:
-            try:
-                p.wait(max(0.05, end - time.time()))
-            except Exception:
-                pass
-        left = [p for p in live if p.poll() is None]
-        if not left:
-            return
+    def _kill(p):
         try:
-            if IS_WIN:
-                args = ["taskkill", "/F", "/T"] + [x for p in left for x in ("/PID", str(p.pid))]
-                subprocess.run(args, creationflags=NO_WINDOW, capture_output=True, timeout=10)
-            else:
-                for p in left:
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(2.5)
+                except subprocess.TimeoutExpired:
+                    pass
+            if p.poll() is None:
+                if IS_WIN:
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
+                                   creationflags=NO_WINDOW, capture_output=True)
+                else:
                     p.kill()
-                    p.wait(1)
         except Exception:
             pass
-
-    @staticmethod
-    def _kill(p):
-        Controller._kill_all([p])
