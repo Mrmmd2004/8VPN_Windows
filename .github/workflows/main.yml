@@ -16,7 +16,7 @@ env:
   AETHER_REF: ${{ inputs.aether_ref || 'v2.4.0' }}
   SINGBOX_VERSION: ${{ inputs.singbox_version || '1.13.21' }}
   WINTUN_VERSION: "0.14.1"
-  APP_VERSION: "4.8.1"
+  APP_VERSION: "4.8"
 
 jobs:
   build:
@@ -57,6 +57,9 @@ jobs:
             --exclude-module tkinter --exclude-module PyQt6.QtNetwork \
             --exclude-module PyQt6.QtSvg --exclude-module PyQt6.QtQml \
             main.py
+          # smaller folder = faster start: drop Qt files the app never loads
+          rm -rf dist/8VPN/_internal/PyQt6/Qt6/translations dist/8VPN/_internal/PyQt6/Qt6/plugins/tls \
+                 dist/8VPN/_internal/PyQt6/Qt6/plugins/networkinformation dist/8VPN/_internal/PyQt6/Qt6/plugins/iconengines || true
           cp -r core dist/8VPN/core
           cp README.md LICENSE dist/8VPN/
           ls -la dist/8VPN
